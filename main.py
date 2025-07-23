@@ -2770,27 +2770,27 @@ def manage_api_storage(
     action: str,
     session_id: str = None,
     api_name: str = None,
-    limit: int = None,
-    offset: int = 0,
-    format_type: str = "json",
     export_path: str = None,
-    export_format: str = "excel"
+    export_format: str = "excel",
+    sql_filter: str = None
 ) -> str:
     """
-    管理API数据存储
+    管理API数据存储（优化版本）
     
     Args:
-        action: 操作类型 (list_sessions|get_data|delete_session|export_data|get_operations)
+        action: 操作类型 (list_sessions|delete_session|export_data|get_operations)
         session_id: 存储会话ID
         api_name: API名称（用于筛选会话）
-        limit: 数据限制数量
-        offset: 数据偏移量
-        format_type: 数据格式 (json|dataframe|excel)
         export_path: 导出路径
         export_format: 导出格式 (excel|csv|json)
+        sql_filter: SQL过滤条件（仅用于export_data）
     
     Returns:
         str: 操作结果
+    
+    注意：
+    - 已移除get_data action，请使用query_api_storage_data函数进行SQL查询
+    - 已移除format_type、limit、offset参数，请使用SQL语句控制
     """
     try:
         if action == "list_sessions":
@@ -2815,47 +2815,7 @@ def manage_api_storage(
                 }
                 return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
-        elif action == "get_data":
-            if not session_id:
-                result = {
-                    "status": "error",
-                    "message": "获取数据需要提供session_id参数"
-                }
-                return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-            
-            success, data, message = api_data_storage.get_stored_data(
-                session_id=session_id,
-                limit=limit,
-                offset=offset,
-                format_type=format_type
-            )
-            
-            if success:
-                result = {
-                    "status": "success",
-                    "message": message,
-                    "data": {
-                        "session_id": session_id,
-                        "format_type": format_type,
-                        "data": data if format_type != "excel" else "<Excel二进制数据>",
-                        "data_count": len(data) if isinstance(data, list) else (len(data) if hasattr(data, '__len__') else 1)
-                    },
-                    "metadata": {
-                        "limit": limit,
-                        "offset": offset
-                    }
-                }
-                return f"📊 存储数据获取成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-            else:
-                result = {
-                    "status": "error",
-                    "message": message,
-                    "data": {
-                        "session_id": session_id
-                    }
-                }
-                return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        
+
         elif action == "delete_session":
             if not session_id:
                 result = {
@@ -2896,34 +2856,121 @@ def manage_api_storage(
             if not export_path:
                 # 生成默认导出路径
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                export_path = f"exports/api_data_{session_id[:8]}_{timestamp}.{export_format}"
+                filter_suffix = "_filtered" if sql_filter else ""
+                export_path = f"exports/api_data_{session_id[:8]}{filter_suffix}_{timestamp}.{export_format}"
             
-            success, message = api_data_storage.export_session_data(
-                session_id=session_id,
-                export_path=export_path,
-                format_type=export_format
-            )
-            
-            if success:
-                result = {
-                    "status": "success",
-                    "message": message,
-                    "data": {
-                        "session_id": session_id,
-                        "export_path": export_path,
-                        "export_format": export_format
+            # 如果有SQL过滤条件，先查询过滤后的数据再导出
+            if sql_filter:
+                try:
+                    # 获取会话信息
+                    session_info = api_data_storage._get_session_info(session_id)
+                    if not session_info:
+                        result = {
+                            "status": "error",
+                            "message": f"存储会话不存在: {session_id}"
+                        }
+                        return f"❌ 导出失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+                    file_path = session_info['file_path']
+                    
+                    # 构建完整的SQL查询
+                    if sql_filter.strip().upper().startswith('SELECT'):
+                        # 如果是完整的SELECT语句
+                        filtered_sql = _preprocess_sql(sql_filter)
+                    else:
+                        # 如果是WHERE条件，构建完整查询
+                        if sql_filter.strip().upper().startswith('WHERE'):
+                            filtered_sql = f"SELECT * FROM api_data {sql_filter}"
+                        else:
+                            filtered_sql = f"SELECT * FROM api_data WHERE {sql_filter}"
+                        filtered_sql = _preprocess_sql(filtered_sql)
+                    
+                    # 执行过滤查询
+                    with sqlite3.connect(file_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cursor = conn.execute(filtered_sql)
+                        rows = cursor.fetchall()
+                    
+                    # 转换为字典列表
+                    filtered_data = [dict(row) for row in rows]
+                    
+                    # 处理JSON字段
+                    for row in filtered_data:
+                        for key, value in row.items():
+                            if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                                try:
+                                    row[key] = json.loads(value)
+                                except:
+                                    pass
+                    
+                    # 导出过滤后的数据
+                    import pandas as pd
+                    from pathlib import Path
+                    
+                    # 确保导出目录存在
+                    Path(export_path).parent.mkdir(parents=True, exist_ok=True)
+                    
+                    if export_format.lower() == 'excel':
+                        df = pd.DataFrame(filtered_data)
+                        df.to_excel(export_path, index=False)
+                    elif export_format.lower() == 'csv':
+                        df = pd.DataFrame(filtered_data)
+                        df.to_csv(export_path, index=False, encoding='utf-8-sig')
+                    elif export_format.lower() == 'json':
+                        with open(export_path, 'w', encoding='utf-8') as f:
+                            json.dump(filtered_data, f, indent=2, ensure_ascii=False, default=str)
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"过滤数据导出成功，共导出 {len(filtered_data)} 条记录",
+                        "data": {
+                            "session_id": session_id,
+                            "export_path": export_path,
+                            "export_format": export_format,
+                            "sql_filter": sql_filter,
+                            "filtered_count": len(filtered_data)
+                        }
                     }
-                }
-                return f"📁 数据导出成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    return f"📁 过滤数据导出成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+                except Exception as e:
+                    result = {
+                        "status": "error",
+                        "message": f"过滤导出失败: {str(e)}",
+                        "data": {
+                            "session_id": session_id,
+                            "sql_filter": sql_filter
+                        }
+                    }
+                    return f"❌ 过滤导出失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
             else:
-                result = {
-                    "status": "error",
-                    "message": message,
-                    "data": {
-                        "session_id": session_id
+                # 使用原有的导出功能
+                success, message = api_data_storage.export_session_data(
+                    session_id=session_id,
+                    export_path=export_path,
+                    format_type=export_format
+                )
+                
+                if success:
+                    result = {
+                        "status": "success",
+                        "message": message,
+                        "data": {
+                            "session_id": session_id,
+                            "export_path": export_path,
+                            "export_format": export_format
+                        }
                     }
-                }
-                return f"❌ 导出失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    return f"📁 数据导出成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                else:
+                    result = {
+                        "status": "error",
+                        "message": message,
+                        "data": {
+                            "session_id": session_id
+                        }
+                    }
+                    return f"❌ 导出失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
         elif action == "get_operations":
             if not session_id:
@@ -2960,7 +3007,8 @@ def manage_api_storage(
             result = {
                 "status": "error",
                 "message": f"不支持的操作: {action}",
-                "supported_actions": ["list_sessions", "get_data", "delete_session", "export_data", "get_operations"]
+                "supported_actions": ["list_sessions", "delete_session", "export_data", "get_operations"],
+                "migration_note": "get_data功能已移除，请使用query_api_storage_data函数进行SQL查询"
             }
             return f"❌ 操作失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
     
@@ -2972,6 +3020,110 @@ def manage_api_storage(
             "error_type": type(e).__name__
         }
         return f"❌ 操作失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+
+@mcp.tool()
+def query_api_storage_data(
+    session_id: str,
+    sql_query: str,
+    params: dict = None,
+    limit: int = 1000
+) -> str:
+    """
+    使用SQL查询API存储数据
+    
+    Args:
+        session_id: 存储会话ID
+        sql_query: SQL查询语句
+        params: 查询参数（可选）
+        limit: 结果限制（默认1000）
+    
+    Returns:
+        str: 查询结果
+    """
+    try:
+        if not session_id or not sql_query:
+            result = {
+                "status": "error",
+                "message": "查询API存储数据需要提供session_id和sql_query参数"
+            }
+            return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 获取会话信息
+        session_info = api_data_storage._get_session_info(session_id)
+        if not session_info:
+            result = {
+                "status": "error",
+                "message": f"存储会话不存在: {session_id}"
+            }
+            return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        file_path = session_info['file_path']
+        
+        # 预处理SQL查询
+        processed_sql = _preprocess_sql(sql_query)
+        
+        # 添加LIMIT限制（如果查询中没有LIMIT）
+        if 'LIMIT' not in processed_sql.upper() and limit:
+            processed_sql += f" LIMIT {limit}"
+        
+        # 执行SQL查询
+        with sqlite3.connect(file_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            if params:
+                cursor = conn.execute(processed_sql, params)
+            else:
+                cursor = conn.execute(processed_sql)
+            
+            rows = cursor.fetchall()
+        
+        # 转换结果为字典列表
+        results = [dict(row) for row in rows]
+        
+        # 处理JSON字段
+        for result_row in results:
+            for key, value in result_row.items():
+                if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                    try:
+                        result_row[key] = json.loads(value)
+                    except:
+                        pass  # 保持原始字符串
+        
+        result = {
+            "status": "success",
+            "message": f"查询成功，返回 {len(results)} 条记录",
+            "data": {
+                "session_id": session_id,
+                "sql_query": sql_query,
+                "results": results,
+                "total_count": len(results)
+            }
+        }
+        return f"🔍 SQL查询成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except sqlite3.Error as e:
+        error_msg = _format_sql_error(str(e), sql_query)
+        result = {
+            "status": "error",
+            "message": f"SQL查询失败: {error_msg}",
+            "data": {
+                "session_id": session_id,
+                "sql_query": sql_query
+            }
+        }
+        return f"❌ SQL查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except Exception as e:
+        logger.error(f"查询API存储数据失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"查询API存储数据失败: {str(e)}",
+            "data": {
+                "session_id": session_id,
+                "sql_query": sql_query
+            }
+        }
+        return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 @mcp.tool()
 def analyze_api_storage_data(
