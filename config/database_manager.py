@@ -64,12 +64,78 @@ try:
 except ImportError:
     pymysql = None
 
+# 增强的PostgreSQL驱动检测
+def detect_postgresql_drivers():
+    """检测可用的PostgreSQL驱动"""
+    drivers = {}
+    
+    # 检测 psycopg2
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        drivers['psycopg2'] = {
+            'available': True,
+            'version': getattr(psycopg2, '__version__', 'unknown'),
+            'module': psycopg2,
+            'extras': {'RealDictCursor': RealDictCursor}
+        }
+    except ImportError as e:
+        drivers['psycopg2'] = {'available': False, 'error': str(e)}
+    
+    # 检测 psycopg2-binary
+    try:
+        import psycopg2.extensions
+        # psycopg2-binary 通常与 psycopg2 共享相同的模块
+        if 'psycopg2' in drivers and drivers['psycopg2']['available']:
+            drivers['psycopg2-binary'] = {
+                'available': True,
+                'version': drivers['psycopg2']['version'],
+                'module': drivers['psycopg2']['module'],
+                'extras': drivers['psycopg2']['extras']
+            }
+    except ImportError as e:
+        drivers['psycopg2-binary'] = {'available': False, 'error': str(e)}
+    
+    # 检测 asyncpg (异步PostgreSQL驱动)
+    try:
+        import asyncpg
+        drivers['asyncpg'] = {
+            'available': True,
+            'version': getattr(asyncpg, '__version__', 'unknown'),
+            'module': asyncpg,
+            'type': 'async'
+        }
+    except ImportError as e:
+        drivers['asyncpg'] = {'available': False, 'error': str(e)}
+    
+    return drivers
+
+# 使用增强检测
+POSTGRESQL_DRIVERS = detect_postgresql_drivers()
+POSTGRESQL_AVAILABLE = any(driver['available'] and driver.get('type') != 'async' for driver in POSTGRESQL_DRIVERS.values())
+
+# 获取首选驱动
+def get_preferred_postgresql_driver():
+    """获取首选的PostgreSQL驱动"""
+    # 优先选择 psycopg2 或 psycopg2-binary
+    if POSTGRESQL_DRIVERS['psycopg2']['available']:
+        return 'psycopg2', POSTGRESQL_DRIVERS['psycopg2']['module'], POSTGRESQL_DRIVERS['psycopg2']['extras']
+    elif POSTGRESQL_DRIVERS['psycopg2-binary']['available']:
+        return 'psycopg2-binary', POSTGRESQL_DRIVERS['psycopg2-binary']['module'], POSTGRESQL_DRIVERS['psycopg2-binary']['extras']
+    else:
+        available_drivers = [name for name, info in POSTGRESQL_DRIVERS.items() 
+                           if info['available'] and info.get('type') != 'async']
+        if available_drivers:
+            driver_name = available_drivers[0]
+            driver_info = POSTGRESQL_DRIVERS[driver_name]
+            return driver_name, driver_info['module'], driver_info.get('extras', {})
+        raise ImportError("没有可用的PostgreSQL驱动，请安装 psycopg2-binary")
+
+# 向后兼容
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
-    POSTGRESQL_AVAILABLE = True
 except ImportError:
-    POSTGRESQL_AVAILABLE = False
     psycopg2 = None
     RealDictCursor = None
 
@@ -135,7 +201,7 @@ class DatabaseManager:
                 connection = driver_module.connect(
                     host=config["host"],
                     port=config.get("port", 3306),
-                    user=config["username"],
+                    user=config.get("user", config.get("username")),
                     password=config["password"],
                     database=config["database"],
                     charset=config.get("charset", "utf8mb4"),
@@ -150,7 +216,7 @@ class DatabaseManager:
                 connection = driver_module.connect(
                     host=config["host"],
                     port=config.get("port", 3306),
-                    user=config["username"],
+                    user=config.get("user", config.get("username")),
                     password=config["password"],
                     database=config["database"],
                     charset=config.get("charset", "utf8mb4"),
@@ -172,23 +238,49 @@ class DatabaseManager:
             return False, f"连接失败 (使用{driver_name if 'driver_name' in locals() else 'unknown'}): {str(e)}"
     
     def _test_postgresql_connection(self, config: Dict[str, Any]) -> tuple[bool, str]:
-        """测试 PostgreSQL 连接"""
+        """测试 PostgreSQL 连接（增强版）"""
+        # 检查驱动可用性
         if not POSTGRESQL_AVAILABLE:
-            return False, "PostgreSQL 驱动未安装，请运行: pip install psycopg2-binary"
+            error_details = []
+            for driver_name, driver_info in POSTGRESQL_DRIVERS.items():
+                if not driver_info['available']:
+                    error_details.append(f"  - {driver_name}: {driver_info.get('error', '未知错误')}")
+            
+            error_msg = "PostgreSQL驱动未安装或不可用:\n" + "\n".join(error_details)
+            error_msg += "\n\n建议安装命令:\n  pip install psycopg2-binary"
+            return False, error_msg
         
+        # 获取首选驱动
         try:
-            connection = psycopg2.connect(
+            driver_name, psycopg2_module, extras = get_preferred_postgresql_driver()
+            RealDictCursor = extras.get('RealDictCursor')
+        except ImportError as e:
+            return False, f"无法获取PostgreSQL驱动: {str(e)}"
+        
+        # 测试连接
+        try:
+            connection = psycopg2_module.connect(
                 host=config["host"],
                 port=config.get("port", 5432),
-                user=config["username"],
+                user=config.get("user", config.get("username")),
                 password=config["password"],
                 database=config["database"],
                 connect_timeout=10
             )
+            
+            cursor = connection.cursor()
+            cursor.execute("SELECT version()")
+            version = cursor.fetchone()[0]
+            cursor.close()
             connection.close()
-            return True, "PostgreSQL 连接测试成功"
+            
+            # 获取驱动版本信息
+            driver_info = POSTGRESQL_DRIVERS[driver_name]
+            driver_version = driver_info.get('version', 'unknown')
+            
+            return True, f"连接成功，使用驱动: {driver_name} v{driver_version}，数据库版本: {version}"
         except Exception as e:
-            return False, f"PostgreSQL 连接失败: {str(e)}"
+            return False, f"连接失败 (使用驱动: {driver_name}): {str(e)}"
     
     def _test_mongodb_connection(self, config: Dict[str, Any]) -> tuple[bool, str]:
         """测试 MongoDB 连接"""
@@ -273,7 +365,7 @@ class DatabaseManager:
             return driver_module.connect(
                 host=config["host"],
                 port=config.get("port", 3306),
-                user=config["username"],
+                user=config.get("user", config.get("username")),
                 password=config["password"],
                 database=config["database"],
                 charset=config.get("charset", "utf8mb4"),
@@ -283,7 +375,7 @@ class DatabaseManager:
             return driver_module.connect(
                 host=config["host"],
                 port=config.get("port", 3306),
-                user=config["username"],
+                user=config.get("user", config.get("username")),
                 password=config["password"],
                 database=config["database"],
                 charset=config.get("charset", "utf8mb4"),
@@ -293,17 +385,34 @@ class DatabaseManager:
             raise ImportError(f"不支持的MySQL驱动: {driver_name}")
     
     def _get_postgresql_connection(self, config: Dict[str, Any]):
-        """获取 PostgreSQL 连接"""
+        """获取 PostgreSQL 连接（增强版）"""
         if not POSTGRESQL_AVAILABLE:
-            raise ImportError("PostgreSQL 驱动未安装，请运行: pip install psycopg2-binary")
+            error_details = []
+            for driver_name, driver_info in POSTGRESQL_DRIVERS.items():
+                if not driver_info['available']:
+                    error_details.append(f"  - {driver_name}: {driver_info.get('error', '未知错误')}")
+            
+            error_msg = "PostgreSQL驱动未安装或不可用:\n" + "\n".join(error_details)
+            error_msg += "\n\n建议安装命令:\n  pip install psycopg2-binary"
+            raise ImportError(error_msg)
         
-        return psycopg2.connect(
+        # 获取首选驱动
+        driver_name, psycopg2_module, extras = get_preferred_postgresql_driver()
+        RealDictCursor = extras.get('RealDictCursor')
+        
+        connection = psycopg2_module.connect(
             host=config["host"],
             port=config.get("port", 5432),
-            user=config["username"],
+            user=config.get("user", config.get("username")),
             password=config["password"],
             database=config["database"]
         )
+        
+        # 如果支持字典游标，设置为默认
+        if RealDictCursor:
+            connection.cursor_factory = RealDictCursor
+        
+        return connection
     
     def _get_mongodb_connection(self, config: Dict[str, Any]):
         """获取 MongoDB 连接"""
