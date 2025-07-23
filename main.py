@@ -29,6 +29,53 @@ from config.api_connector import api_connector
 from config.data_transformer import data_transformer
 from config.api_data_storage import api_data_storage
 
+# ================================
+# DataFrame序列化处理
+# ================================
+
+def _serialize_dataframe(df) -> dict:
+    """将DataFrame序列化为JSON可序列化的格式"""
+    try:
+        # 转换为字典格式
+        data = {
+            "columns": df.columns.tolist(),
+            "data": df.values.tolist(),
+            "index": df.index.tolist(),
+            "shape": df.shape,
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()}
+        }
+        return data
+    except Exception as e:
+        logger.warning(f"DataFrame序列化失败: {e}")
+        # 降级处理：转换为简单的记录格式
+        try:
+            return {
+                "columns": df.columns.tolist(),
+                "records": df.to_dict('records'),
+                "shape": df.shape,
+                "note": "使用简化格式，部分类型信息可能丢失"
+            }
+        except Exception as e2:
+            logger.error(f"DataFrame简化序列化也失败: {e2}")
+            return {
+                "error": "DataFrame序列化失败",
+                "shape": getattr(df, 'shape', 'unknown'),
+                "columns": getattr(df, 'columns', []).tolist() if hasattr(df, 'columns') else []
+            }
+
+def _handle_data_format(data, format_type: str = "dict"):
+    """处理不同数据格式的输出"""
+    if format_type == "dataframe" and isinstance(data, pd.DataFrame):
+        return _serialize_dataframe(data)
+    elif isinstance(data, pd.DataFrame):
+        # 默认转换为字典列表
+        try:
+            return data.to_dict('records')
+        except Exception:
+            return _serialize_dataframe(data)
+    else:
+        return data
+
 
 # ================================
 # 1. 配置和初始化
@@ -90,6 +137,16 @@ def init_database():
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
         raise
+
+def _escape_identifier(identifier: str) -> str:
+    """转义SQL标识符（表名、列名等）"""
+    # 使用双引号包围标识符，并转义内部的双引号
+    return f'"{identifier.replace('"', '""')}"'
+
+def _safe_table_query(table_name: str, query_template: str) -> str:
+    """安全地构建包含表名的查询"""
+    escaped_table = _escape_identifier(table_name)
+    return query_template.format(table=escaped_table)
 
 def _table_exists(table_name: str) -> bool:
     """检查表是否存在"""
@@ -456,6 +513,40 @@ def _connect_from_config(config: dict, target_table: str = None) -> str:
         }
         return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
+def _preprocess_sql(query: str) -> str:
+    """预处理SQL语句"""
+    # 移除末尾分号和多余空格
+    query = query.strip().rstrip(';').strip()
+    return query
+
+def _format_sql_error(error: Exception, query: str) -> dict:
+    """格式化SQL错误信息"""
+    error_msg = str(error)
+    suggestions = []
+    
+    if "syntax error" in error_msg.lower():
+        if "-" in query and "near \"-\"" in error_msg:
+            suggestions.append("表名或列名包含特殊字符，请使用双引号包围，如: \"table-name\"")
+        suggestions.append("检查SQL语法是否正确")
+        suggestions.append("确保表名和列名存在")
+    elif "no such table" in error_msg.lower():
+        suggestions.append("检查表名是否正确")
+        suggestions.append("使用 get_data_info 工具查看可用的表")
+    elif "no such column" in error_msg.lower():
+        suggestions.append("检查列名是否正确")
+        suggestions.append("使用 get_data_info 工具查看表结构")
+    elif "only execute one statement" in error_msg.lower():
+        suggestions.append("移除SQL语句末尾的分号")
+        suggestions.append("一次只能执行一条SQL语句")
+    
+    return {
+        "status": "error",
+        "message": f"SQL执行失败: {error_msg}",
+        "error_type": type(error).__name__,
+        "suggestions": suggestions,
+        "query": query
+    }
+
 @mcp.tool()
 def execute_sql(
     query: str,
@@ -474,6 +565,9 @@ def execute_sql(
         str: 查询结果
     """
     try:
+        # 预处理SQL语句
+        query = _preprocess_sql(query)
+        
         # 添加LIMIT限制
         if "LIMIT" not in query.upper() and "SELECT" in query.upper():
             query = f"{query} LIMIT {limit}"
@@ -510,12 +604,8 @@ def execute_sql(
             
     except Exception as e:
         logger.error(f"SQL执行失败: {e}")
-        result = {
-            "status": "error",
-            "message": f"SQL执行失败: {str(e)}",
-            "error_type": type(e).__name__,
-            "query": query
-        }
+        result = _format_sql_error(e, query)
+        result["timestamp"] = datetime.now().isoformat()
         return f"❌ SQL执行失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 @mcp.tool()
@@ -545,12 +635,21 @@ def get_data_info(
                 # 获取表的详细信息
                 table_info = []
                 for table in tables:
-                    cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
-                    row_count = cursor.fetchone()[0]
-                    table_info.append({
-                        "table_name": table,
-                        "row_count": row_count
-                    })
+                    try:
+                        escaped_table = _escape_identifier(table)
+                        cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                        row_count = cursor.fetchone()[0]
+                        table_info.append({
+                            "table_name": table,
+                            "row_count": row_count
+                        })
+                    except Exception as e:
+                        logger.warning(f"无法获取表 '{table}' 的行数: {e}")
+                        table_info.append({
+                            "table_name": table,
+                            "row_count": "N/A",
+                            "error": str(e)
+                        })
                 
                 result = {
                     "status": "success",
@@ -565,7 +664,8 @@ def get_data_info(
                 
             elif info_type == "schema" and table_name:
                 # 获取表结构
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                escaped_table = _escape_identifier(table_name)
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 columns = cursor.fetchall()
                 
                 schema = []
@@ -592,7 +692,8 @@ def get_data_info(
                 
             elif info_type == "stats" and table_name:
                 # 获取表统计信息
-                cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+                escaped_table = _escape_identifier(table_name)
+                cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
                 row_count = cursor.fetchone()[0]
                 
                 result = {
@@ -642,49 +743,49 @@ def _table_exists(table_name: str) -> bool:
 def _calculate_basic_stats(table_name: str, columns: list, options: dict) -> dict:
     """计算基础统计信息"""
     try:
+        escaped_table = _escape_identifier(table_name)
+        
         with get_db_connection() as conn:
             if columns:
                 # 只分析指定列
                 numeric_columns = []
                 for col in columns:
                     # 检查列是否为数值类型
-                    cursor = conn.execute(f"SELECT typeof({col}) FROM {table_name} LIMIT 1")
+                    escaped_col = _escape_identifier(col)
+                    cursor = conn.execute(f"SELECT typeof({escaped_col}) FROM {escaped_table} LIMIT 1")
                     col_type = cursor.fetchone()[0]
                     if col_type in ['integer', 'real']:
                         numeric_columns.append(col)
                 
                 if not numeric_columns:
                     return {"error": "没有找到数值类型的列"}
-                
-                columns_str = ", ".join(numeric_columns)
             else:
                 # 自动检测数值列
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 all_columns = cursor.fetchall()
                 numeric_columns = [col[1] for col in all_columns if col[2] in ['INTEGER', 'REAL', 'NUMERIC']]
                 
                 if not numeric_columns:
                     return {"error": "表中没有数值类型的列"}
-                
-                columns_str = ", ".join(numeric_columns)
             
             # 计算统计信息
             stats_result = {}
             for col in numeric_columns:
+                escaped_col = _escape_identifier(col)
                 cursor = conn.execute(f"""
                     SELECT 
-                        COUNT({col}) as count,
-                        AVG({col}) as mean,
-                        MIN({col}) as min_val,
-                        MAX({col}) as max_val,
-                        COUNT(CASE WHEN {col} IS NULL THEN 1 END) as null_count
-                    FROM {table_name}
+                        COUNT({escaped_col}) as count,
+                        AVG({escaped_col}) as mean,
+                        MIN({escaped_col}) as min_val,
+                        MAX({escaped_col}) as max_val,
+                        COUNT(CASE WHEN {escaped_col} IS NULL THEN 1 END) as null_count
+                    FROM {escaped_table}
                 """)
                 
                 row = cursor.fetchone()
                 
                 # 计算中位数和标准差
-                cursor = conn.execute(f"SELECT {col} FROM {table_name} WHERE {col} IS NOT NULL ORDER BY {col}")
+                cursor = conn.execute(f"SELECT {escaped_col} FROM {escaped_table} WHERE {escaped_col} IS NOT NULL ORDER BY {escaped_col}")
                 values = [row[0] for row in cursor.fetchall()]
                 
                 if values:
@@ -716,12 +817,14 @@ def _calculate_basic_stats(table_name: str, columns: list, options: dict) -> dic
 def _calculate_correlation(table_name: str, columns: list, options: dict) -> dict:
     """计算相关系数"""
     try:
+        escaped_table = _escape_identifier(table_name)
+        
         with get_db_connection() as conn:
             # 获取数值列
             if columns and len(columns) >= 2:
                 numeric_columns = columns[:10]  # 限制最多10列
             else:
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 all_columns = cursor.fetchall()
                 numeric_columns = [col[1] for col in all_columns if col[2] in ['INTEGER', 'REAL', 'NUMERIC']][:10]
             
@@ -729,8 +832,12 @@ def _calculate_correlation(table_name: str, columns: list, options: dict) -> dic
                 return {"error": "需要至少2个数值列来计算相关性"}
             
             # 获取数据
-            columns_str = ", ".join(numeric_columns)
-            df = pd.read_sql(f"SELECT {columns_str} FROM {table_name}", conn)
+            escaped_columns = [_escape_identifier(col) for col in numeric_columns]
+            columns_str = ", ".join(escaped_columns)
+            df = pd.read_sql(f"SELECT {columns_str} FROM {escaped_table}", conn)
+            
+            # 重命名列为原始名称（去掉转义符号）
+            df.columns = numeric_columns
             
             # 计算相关系数矩阵
             correlation_matrix = df.corr().round(4)
@@ -756,12 +863,13 @@ def _detect_outliers(table_name: str, columns: list, options: dict) -> dict:
     try:
         method = options.get("method", "iqr")  # iqr 或 zscore
         threshold = options.get("threshold", 3)  # Z-score阈值
+        escaped_table = _escape_identifier(table_name)
         
         with get_db_connection() as conn:
             if columns:
                 numeric_columns = columns[:5]  # 限制最多5列
             else:
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 all_columns = cursor.fetchall()
                 numeric_columns = [col[1] for col in all_columns if col[2] in ['INTEGER', 'REAL', 'NUMERIC']][:5]
             
@@ -771,7 +879,8 @@ def _detect_outliers(table_name: str, columns: list, options: dict) -> dict:
             outliers_result = {}
             
             for col in numeric_columns:
-                cursor = conn.execute(f"SELECT {col} FROM {table_name} WHERE {col} IS NOT NULL")
+                escaped_col = _escape_identifier(col)
+                cursor = conn.execute(f"SELECT {escaped_col} FROM {escaped_table} WHERE {escaped_col} IS NOT NULL")
                 values = [row[0] for row in cursor.fetchall()]
                 
                 if not values:
@@ -807,22 +916,25 @@ def _detect_outliers(table_name: str, columns: list, options: dict) -> dict:
 def _check_missing_values(table_name: str, columns: list, options: dict) -> dict:
     """检查缺失值"""
     try:
+        escaped_table = _escape_identifier(table_name)
+        
         with get_db_connection() as conn:
             if columns:
                 target_columns = columns
             else:
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 target_columns = [col[1] for col in cursor.fetchall()]
             
             missing_result = {}
             total_rows = 0
             
             # 获取总行数
-            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+            cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
             total_rows = cursor.fetchone()[0]
             
             for col in target_columns:
-                cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name} WHERE {col} IS NULL")
+                escaped_col = _escape_identifier(col)
+                cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table} WHERE {escaped_col} IS NULL")
                 null_count = cursor.fetchone()[0]
                 
                 missing_result[col] = {

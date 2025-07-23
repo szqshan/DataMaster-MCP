@@ -149,26 +149,52 @@ class APIConfigManager:
             }
         })
     
-    def validate_api_config(self, api_name: str) -> tuple[bool, str]:
+    def validate_api_config(self, api_name: str) -> tuple[bool, str, list]:
         """验证API配置的完整性"""
         config = self.get_api_config(api_name)
+        suggestions = []
+        
         if not config:
-            return False, f"API配置不存在或已禁用: {api_name}"
+            suggestions.extend([
+                f"请检查API配置文件中是否存在名为 '{api_name}' 的配置",
+                "确保API配置的 'enabled' 字段为 true",
+                "使用 manage_api_config(action='list') 查看所有可用的API配置"
+            ])
+            return False, f"API配置不存在或已禁用: {api_name}", suggestions
         
         # 验证必需字段
         required_fields = ["base_url", "auth_type"]
+        missing_fields = []
         for field in required_fields:
             if not config.get(field):
-                return False, f"缺少必需的配置字段: {field}"
+                missing_fields.append(field)
+        
+        if missing_fields:
+            suggestions.extend([
+                f"请在API配置中添加缺少的字段: {', '.join(missing_fields)}",
+                "base_url 示例: 'https://api.example.com'",
+                "auth_type 可选值: 'api_key', 'bearer_token', 'basic', 'custom_header', 'none'"
+            ])
+            return False, f"缺少必需的配置字段: {', '.join(missing_fields)}", suggestions
         
         # 验证URL格式
         base_url = config.get("base_url")
         try:
             parsed_url = urlparse(base_url)
             if not parsed_url.scheme or not parsed_url.netloc:
-                return False, f"无效的base_url格式: {base_url}"
+                suggestions.extend([
+                    "base_url 必须包含协议和域名",
+                    "正确格式示例: 'https://api.example.com' 或 'http://localhost:8080'",
+                    "确保URL不包含路径部分，路径应在端点配置中指定"
+                ])
+                return False, f"无效的base_url格式: {base_url}", suggestions
         except Exception:
-            return False, f"无效的base_url格式: {base_url}"
+            suggestions.extend([
+                "base_url 格式无效",
+                "请检查URL是否包含特殊字符或格式错误",
+                "正确格式示例: 'https://api.example.com'"
+            ])
+            return False, f"无效的base_url格式: {base_url}", suggestions
         
         # 验证认证配置
         auth_type = config.get("auth_type")
@@ -176,31 +202,72 @@ class APIConfigManager:
         
         if auth_type == "api_key":
             if not auth_config.get("api_key"):
-                return False, "API Key认证缺少api_key配置"
+                suggestions.extend([
+                    "API Key认证需要在 auth_config 中配置 'api_key' 字段",
+                    "示例: 'auth_config': {'api_key': '${YOUR_API_KEY}', 'key_param': 'apikey', 'key_location': 'query'}",
+                    "可以使用环境变量: '${API_KEY_NAME}'",
+                    "key_location 可选值: 'query'（URL参数）, 'header'（请求头）"
+                ])
+                return False, "API Key认证缺少api_key配置", suggestions
         elif auth_type == "bearer_token":
             if not auth_config.get("token"):
-                return False, "Bearer Token认证缺少token配置"
+                suggestions.extend([
+                    "Bearer Token认证需要在 auth_config 中配置 'token' 字段",
+                    "示例: 'auth_config': {'token': '${BEARER_TOKEN}'}",
+                    "可以使用环境变量: '${TOKEN_NAME}'"
+                ])
+                return False, "Bearer Token认证缺少token配置", suggestions
         elif auth_type == "basic":
             if not auth_config.get("username") or not auth_config.get("password"):
-                return False, "Basic认证缺少username或password配置"
+                suggestions.extend([
+                    "Basic认证需要在 auth_config 中配置 'username' 和 'password' 字段",
+                    "示例: 'auth_config': {'username': '${USERNAME}', 'password': '${PASSWORD}'}",
+                    "建议使用环境变量存储敏感信息"
+                ])
+                return False, "Basic认证缺少username或password配置", suggestions
         elif auth_type == "custom_header":
             if not auth_config.get("headers"):
-                return False, "自定义Header认证缺少headers配置"
+                suggestions.extend([
+                    "自定义Header认证需要在 auth_config 中配置 'headers' 字段",
+                    "示例: 'auth_config': {'headers': {'X-API-Key': '${API_KEY}', 'X-Client-ID': '${CLIENT_ID}'}}",
+                    "headers 应该是一个包含自定义请求头的字典"
+                ])
+                return False, "自定义Header认证缺少headers配置", suggestions
         elif auth_type != "none":
-            return False, f"不支持的认证类型: {auth_type}"
+            suggestions.extend([
+                f"不支持的认证类型: {auth_type}",
+                "支持的认证类型: 'api_key', 'bearer_token', 'basic', 'custom_header', 'none'",
+                "请检查 auth_type 字段的拼写和大小写"
+            ])
+            return False, f"不支持的认证类型: {auth_type}", suggestions
         
         # 验证端点配置
         endpoints = config.get("endpoints", {})
         if not endpoints:
-            return False, "缺少端点配置"
+            suggestions.extend([
+                "API配置必须包含至少一个端点",
+                "示例: 'endpoints': {'get_data': {'path': '/api/data', 'method': 'GET', 'description': '获取数据'}}",
+                "每个端点必须包含 'path' 和 'method' 字段"
+            ])
+            return False, "缺少端点配置", suggestions
         
         for endpoint_name, endpoint_config in endpoints.items():
             if not endpoint_config.get("path"):
-                return False, f"端点 {endpoint_name} 缺少path配置"
+                suggestions.extend([
+                    f"端点 '{endpoint_name}' 缺少 'path' 配置",
+                    "path 示例: '/api/data', '/users/{id}', '/search'",
+                    "path 应该是相对于 base_url 的路径"
+                ])
+                return False, f"端点 {endpoint_name} 缺少path配置", suggestions
             if not endpoint_config.get("method"):
-                return False, f"端点 {endpoint_name} 缺少method配置"
+                suggestions.extend([
+                    f"端点 '{endpoint_name}' 缺少 'method' 配置",
+                    "method 可选值: 'GET', 'POST', 'PUT', 'DELETE', 'PATCH'",
+                    "method 必须是大写字母"
+                ])
+                return False, f"端点 {endpoint_name} 缺少method配置", suggestions
         
-        return True, "配置验证通过"
+        return True, "配置验证通过", []
     
     def add_api_config(self, api_name: str, config: Dict[str, Any]) -> bool:
         """添加新的API配置"""

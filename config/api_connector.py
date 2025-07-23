@@ -61,9 +61,12 @@ class APIConnector:
         """测试API连接"""
         try:
             # 验证配置
-            is_valid, message = self.config_manager.validate_api_config(api_name)
+            is_valid, message, suggestions = self.config_manager.validate_api_config(api_name)
             if not is_valid:
-                return False, message
+                error_msg = message
+                if suggestions:
+                    error_msg += "\n\n修复建议:\n" + "\n".join(f"• {s}" for s in suggestions)
+                return False, error_msg
             
             config = self.config_manager.get_api_config(api_name)
             base_url = config["base_url"]
