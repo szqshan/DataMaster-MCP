@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 import json
 from contextlib import contextmanager
+from datetime import datetime, date, time
+from decimal import Decimal
 
 # 增强的MySQL驱动检测
 def detect_mysql_drivers():
@@ -149,6 +151,17 @@ except ImportError:
 from .config_manager import config_manager
 
 logger = logging.getLogger(__name__)
+
+def json_serializer(obj):
+    """JSON序列化函数，处理datetime等特殊对象类型"""
+    if isinstance(obj, (datetime, date, time)):
+        return obj.isoformat()
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    elif hasattr(obj, '__dict__'):
+        return obj.__dict__
+    else:
+        return str(obj)
 
 class DatabaseManager:
     """数据库连接管理器"""
@@ -498,9 +511,33 @@ class DatabaseManager:
                 
                 if query.strip().upper().startswith('SELECT'):
                     rows = cursor.fetchall()
+                    # 处理查询结果，确保datetime等对象可以序列化
+                    processed_data = []
+                    for row in rows:
+                        if hasattr(row, 'keys'):
+                            # 字典类型的行（如psycopg2的DictCursor）
+                            processed_row = {}
+                            for key, value in dict(row).items():
+                                try:
+                                    json.dumps(value)  # 测试是否可序列化
+                                    processed_row[key] = value
+                                except (TypeError, ValueError):
+                                    processed_row[key] = json_serializer(value)
+                            processed_data.append(processed_row)
+                        else:
+                            # 元组类型的行
+                            processed_row = []
+                            for value in row:
+                                try:
+                                    json.dumps(value)  # 测试是否可序列化
+                                    processed_row.append(value)
+                                except (TypeError, ValueError):
+                                    processed_row.append(json_serializer(value))
+                            processed_data.append(processed_row)
+                    
                     return {
                         "success": True,
-                        "data": [dict(row) if hasattr(row, 'keys') else row for row in rows],
+                        "data": processed_data,
                         "row_count": len(rows)
                     }
                 else:
@@ -520,9 +557,25 @@ class DatabaseManager:
                 
                 if query.strip().upper().startswith('SELECT'):
                     rows = cursor.fetchall()
+                    # 获取列名
+                    columns = [description[0] for description in cursor.description] if cursor.description else []
+                    
+                    # 处理查询结果，确保datetime等对象可以序列化
+                    processed_data = []
+                    for row in rows:
+                        processed_row = {}
+                        for i, value in enumerate(row):
+                            column_name = columns[i] if i < len(columns) else f"column_{i}"
+                            try:
+                                json.dumps(value)  # 测试是否可序列化
+                                processed_row[column_name] = value
+                            except (TypeError, ValueError):
+                                processed_row[column_name] = json_serializer(value)
+                        processed_data.append(processed_row)
+                    
                     return {
                         "success": True,
-                        "data": [dict(row) for row in rows],
+                        "data": processed_data,
                         "row_count": len(rows)
                     }
                 else:
