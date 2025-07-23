@@ -38,6 +38,16 @@
       "file_path": "data/example.db",
       "description": "示例SQLite数据库连接",
       "enabled": false
+    },
+    "user_mongodb": {
+      "type": "mongodb",
+      "host": "192.168.133.128",
+      "port": 27017,
+      "username": "shanzhiqiang",
+      "password": "shanzhiqiang",
+      "database": "test",
+      "auth_source": "admin",
+      "description": "用户MongoDB测试数据库"
     }
   },
   "default_limits": {

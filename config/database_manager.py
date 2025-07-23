@@ -441,7 +441,22 @@ class DatabaseManager:
             uri = f"mongodb://{config['host']}:{config.get('port', 27017)}/{config['database']}"
         
         client = pymongo.MongoClient(uri)
-        return client[config["database"]]
+        # 返回一个包装对象，避免数据库对象的布尔值测试问题
+        class MongoDBConnection:
+            def __init__(self, client, database):
+                self.client = client
+                self.database = database
+                
+            def __getitem__(self, collection_name):
+                return self.database[collection_name]
+                
+            def list_collection_names(self):
+                return self.database.list_collection_names()
+                
+            def close(self):
+                self.client.close()
+                
+        return MongoDBConnection(client, client[config["database"]])
     
     def _get_sqlite_connection(self, config: Dict[str, Any]):
         """获取 SQLite 连接"""
@@ -588,38 +603,27 @@ class DatabaseManager:
     
     def _execute_mongodb_query(self, database_name: str, query: str, params: Optional[tuple] = None) -> Dict[str, Any]:
         """执行 MongoDB 查询"""
-        # MongoDB 查询需要特殊处理，这里提供基本框架
-        # 实际使用时需要根据具体需求实现
         try:
             with self.get_connection(database_name) as db:
-                # 这里需要解析查询字符串并转换为 MongoDB 操作
-                # 简化实现：假设查询是 JSON 格式的 find 操作
-                query_obj = json.loads(query)
-                collection_name = query_obj.get("collection")
-                operation = query_obj.get("operation", "find")
-                filter_obj = query_obj.get("filter", {})
+                # 处理不同类型的MongoDB查询
+                query = query.strip()
                 
-                collection = db[collection_name]
-                
-                if operation == "find":
-                    cursor = collection.find(filter_obj)
-                    results = list(cursor)
-                    # 转换 ObjectId 为字符串
-                    for result in results:
-                        if '_id' in result:
-                            result['_id'] = str(result['_id'])
-                    
-                    return {
-                        "success": True,
-                        "data": results,
-                        "row_count": len(results)
-                    }
+                # 处理MongoDB shell命令
+                if query.startswith('show '):
+                    return self._handle_mongodb_show_command(db, query)
+                elif query.startswith('db.'):
+                    return self._handle_mongodb_db_command(db, query)
                 else:
-                    return {
-                        "success": False,
-                        "error": f"不支持的 MongoDB 操作: {operation}",
-                        "data": []
-                    }
+                    # 尝试解析为JSON格式的查询
+                    try:
+                        query_obj = json.loads(query)
+                        return self._handle_mongodb_json_query(db, query_obj)
+                    except json.JSONDecodeError:
+                        return {
+                            "success": False,
+                            "error": f"无法解析MongoDB查询: {query}",
+                            "data": []
+                        }
                     
         except Exception as e:
             return {
@@ -627,6 +631,228 @@ class DatabaseManager:
                 "error": f"MongoDB 查询失败: {str(e)}",
                 "data": []
             }
+    
+    def _handle_mongodb_show_command(self, db, query: str) -> Dict[str, Any]:
+        """处理MongoDB show命令"""
+        try:
+            if query == "show dbs" or query == "show databases":
+                client = db.client
+                databases = client.list_database_names()
+                return {
+                    "success": True,
+                    "data": [{"database": name} for name in databases],
+                    "row_count": len(databases)
+                }
+            elif query == "show collections":
+                collections = db.list_collection_names()
+                return {
+                    "success": True,
+                    "data": [{"collection": name} for name in collections],
+                    "row_count": len(collections)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的show命令: {query}",
+                    "data": []
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"执行show命令失败: {str(e)}",
+                "data": []
+            }
+    
+    def _handle_mongodb_db_command(self, db, query: str) -> Dict[str, Any]:
+        """处理MongoDB db.命令"""
+        try:
+            # 简单的命令解析
+            if ".find(" in query:
+                # 提取集合名和查询条件
+                parts = query.split('.')
+                if len(parts) >= 3 and parts[0] == 'db':
+                    collection_name = parts[1]
+                    collection = db[collection_name]
+                    
+                    # 提取find参数
+                    find_start = query.find('.find(')
+                    find_end = query.rfind(')')
+                    if find_start != -1 and find_end != -1:
+                        find_params = query[find_start + 6:find_end]
+                        if find_params.strip():
+                            try:
+                                filter_obj = json.loads(find_params)
+                            except json.JSONDecodeError:
+                                filter_obj = {}
+                        else:
+                            filter_obj = {}
+                        
+                        cursor = collection.find(filter_obj)
+                        results = list(cursor)
+                        
+                        # 处理BSON序列化问题
+                        processed_results = []
+                        for result in results:
+                            processed_result = self._process_mongodb_document(result)
+                            processed_results.append(processed_result)
+                        
+                        return {
+                            "success": True,
+                            "data": processed_results,
+                            "row_count": len(processed_results)
+                        }
+            
+            elif ".insertOne(" in query:
+                # 处理插入操作
+                parts = query.split('.')
+                if len(parts) >= 3 and parts[0] == 'db':
+                    collection_name = parts[1]
+                    collection = db[collection_name]
+                    
+                    # 提取插入数据
+                    insert_start = query.find('.insertOne(')
+                    insert_end = query.rfind(')')
+                    if insert_start != -1 and insert_end != -1:
+                        insert_data = query[insert_start + 11:insert_end]
+                        try:
+                            doc = json.loads(insert_data)
+                            # 处理datetime对象
+                            doc = self._prepare_mongodb_document(doc)
+                            result = collection.insert_one(doc)
+                            return {
+                                "success": True,
+                                "data": [{"inserted_id": str(result.inserted_id)}],
+                                "row_count": 1
+                            }
+                        except json.JSONDecodeError as e:
+                            return {
+                                "success": False,
+                                "error": f"无法解析插入数据: {str(e)}",
+                                "data": []
+                            }
+            
+            elif ".aggregate(" in query:
+                # 处理聚合操作
+                parts = query.split('.')
+                if len(parts) >= 3 and parts[0] == 'db':
+                    collection_name = parts[1]
+                    collection = db[collection_name]
+                    
+                    # 提取聚合管道
+                    agg_start = query.find('.aggregate(')
+                    agg_end = query.rfind(')')
+                    if agg_start != -1 and agg_end != -1:
+                        agg_pipeline = query[agg_start + 11:agg_end]
+                        try:
+                            pipeline = json.loads(agg_pipeline)
+                            cursor = collection.aggregate(pipeline)
+                            results = list(cursor)
+                            
+                            # 处理BSON序列化问题
+                            processed_results = []
+                            for result in results:
+                                processed_result = self._process_mongodb_document(result)
+                                processed_results.append(processed_result)
+                            
+                            return {
+                                "success": True,
+                                "data": processed_results,
+                                "row_count": len(processed_results)
+                            }
+                        except json.JSONDecodeError as e:
+                            return {
+                                "success": False,
+                                "error": f"无法解析聚合管道: {str(e)}",
+                                "data": []
+                            }
+            
+            return {
+                "success": False,
+                "error": f"不支持的MongoDB命令: {query}",
+                "data": []
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"执行MongoDB命令失败: {str(e)}",
+                "data": []
+            }
+    
+    def _handle_mongodb_json_query(self, db, query_obj: dict) -> Dict[str, Any]:
+        """处理JSON格式的MongoDB查询"""
+        try:
+            collection_name = query_obj.get("collection")
+            operation = query_obj.get("operation", "find")
+            filter_obj = query_obj.get("filter", {})
+            
+            if not collection_name:
+                return {
+                    "success": False,
+                    "error": "缺少collection参数",
+                    "data": []
+                }
+            
+            collection = db[collection_name]
+            
+            if operation == "find":
+                cursor = collection.find(filter_obj)
+                results = list(cursor)
+                
+                # 处理BSON序列化问题
+                processed_results = []
+                for result in results:
+                    processed_result = self._process_mongodb_document(result)
+                    processed_results.append(processed_result)
+                
+                return {
+                    "success": True,
+                    "data": processed_results,
+                    "row_count": len(processed_results)
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"不支持的 MongoDB 操作: {operation}",
+                    "data": []
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"执行JSON查询失败: {str(e)}",
+                "data": []
+            }
+    
+    def _process_mongodb_document(self, doc: dict) -> dict:
+        """处理MongoDB文档，解决BSON序列化问题"""
+        processed_doc = {}
+        for key, value in doc.items():
+            try:
+                # 测试是否可以JSON序列化
+                json.dumps(value)
+                processed_doc[key] = value
+            except (TypeError, ValueError):
+                # 使用自定义序列化函数
+                processed_doc[key] = json_serializer(value)
+        return processed_doc
+    
+    def _prepare_mongodb_document(self, doc: dict) -> dict:
+        """准备MongoDB文档，处理Python对象到BSON的转换"""
+        prepared_doc = {}
+        for key, value in doc.items():
+            if isinstance(value, (datetime, date, time)):
+                # 保持datetime对象，MongoDB可以直接存储
+                prepared_doc[key] = value
+            elif isinstance(value, dict):
+                # 递归处理嵌套字典
+                prepared_doc[key] = self._prepare_mongodb_document(value)
+            elif isinstance(value, list):
+                # 处理列表
+                prepared_doc[key] = [self._prepare_mongodb_document(item) if isinstance(item, dict) else item for item in value]
+            else:
+                prepared_doc[key] = value
+        return prepared_doc
     
     def get_table_list(self, database_name: str) -> List[str]:
         """获取数据库中的表列表"""
