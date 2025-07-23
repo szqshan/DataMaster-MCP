@@ -11,12 +11,57 @@ from pathlib import Path
 import json
 from contextlib import contextmanager
 
-# 可选依赖导入
+# 增强的MySQL驱动检测
+def detect_mysql_drivers():
+    """检测可用的MySQL驱动"""
+    drivers = {}
+    
+    # 检测 pymysql
+    try:
+        import pymysql
+        drivers['pymysql'] = {
+            'available': True,
+            'version': getattr(pymysql, '__version__', 'unknown'),
+            'module': pymysql
+        }
+    except ImportError as e:
+        drivers['pymysql'] = {'available': False, 'error': str(e)}
+    
+    # 检测 mysql-connector-python
+    try:
+        import mysql.connector
+        drivers['mysql.connector'] = {
+            'available': True,
+            'version': getattr(mysql.connector, '__version__', 'unknown'),
+            'module': mysql.connector
+        }
+    except ImportError as e:
+        drivers['mysql.connector'] = {'available': False, 'error': str(e)}
+    
+    return drivers
+
+# 使用增强检测
+MYSQL_DRIVERS = detect_mysql_drivers()
+MYSQL_AVAILABLE = any(driver['available'] for driver in MYSQL_DRIVERS.values())
+
+# 获取首选驱动
+def get_preferred_mysql_driver():
+    """获取首选的MySQL驱动"""
+    if MYSQL_DRIVERS['pymysql']['available']:
+        return 'pymysql', MYSQL_DRIVERS['pymysql']['module']
+    elif MYSQL_DRIVERS['mysql.connector']['available']:
+        return 'mysql.connector', MYSQL_DRIVERS['mysql.connector']['module']
+    else:
+        available_drivers = [name for name, info in MYSQL_DRIVERS.items() if info['available']]
+        if available_drivers:
+            driver_name = available_drivers[0]
+            return driver_name, MYSQL_DRIVERS[driver_name]['module']
+        raise ImportError("没有可用的MySQL驱动，请安装 pymysql 或 mysql-connector-python")
+
+# 向后兼容
 try:
     import pymysql
-    MYSQL_AVAILABLE = True
 except ImportError:
-    MYSQL_AVAILABLE = False
     pymysql = None
 
 try:
@@ -77,24 +122,54 @@ class DatabaseManager:
             return False, f"连接测试失败: {str(e)}"
     
     def _test_mysql_connection(self, config: Dict[str, Any]) -> tuple[bool, str]:
-        """测试 MySQL 连接"""
+        """测试 MySQL 连接（使用增强驱动检测）"""
         if not MYSQL_AVAILABLE:
-            return False, "MySQL 驱动未安装，请运行: pip install pymysql"
+            driver_status = "\n".join([f"  {name}: {'✅' if info['available'] else '❌'} {info.get('version', info.get('error', ''))}" 
+                                     for name, info in MYSQL_DRIVERS.items()])
+            return False, f"MySQL 驱动未安装或不可用:\n{driver_status}\n请运行: pip install pymysql mysql-connector-python"
         
         try:
-            connection = pymysql.connect(
-                host=config["host"],
-                port=config.get("port", 3306),
-                user=config["username"],
-                password=config["password"],
-                database=config["database"],
-                charset=config.get("charset", "utf8mb4"),
-                connect_timeout=10
-            )
+            driver_name, driver_module = get_preferred_mysql_driver()
+            
+            if driver_name == 'pymysql':
+                connection = driver_module.connect(
+                    host=config["host"],
+                    port=config.get("port", 3306),
+                    user=config["username"],
+                    password=config["password"],
+                    database=config["database"],
+                    charset=config.get("charset", "utf8mb4"),
+                    connect_timeout=10
+                )
+                
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT VERSION()")
+                    version = cursor.fetchone()[0]
+                    
+            elif driver_name == 'mysql.connector':
+                connection = driver_module.connect(
+                    host=config["host"],
+                    port=config.get("port", 3306),
+                    user=config["username"],
+                    password=config["password"],
+                    database=config["database"],
+                    charset=config.get("charset", "utf8mb4"),
+                    connection_timeout=10
+                )
+                
+                cursor = connection.cursor()
+                cursor.execute("SELECT VERSION()")
+                version = cursor.fetchone()[0]
+                cursor.close()
+                
+            else:
+                return False, f"不支持的MySQL驱动: {driver_name}"
+            
             connection.close()
-            return True, "MySQL 连接测试成功"
+            return True, f"连接成功 (使用{driver_name})，MySQL版本: {version}"
+            
         except Exception as e:
-            return False, f"MySQL 连接失败: {str(e)}"
+            return False, f"连接失败 (使用{driver_name if 'driver_name' in locals() else 'unknown'}): {str(e)}"
     
     def _test_postgresql_connection(self, config: Dict[str, Any]) -> tuple[bool, str]:
         """测试 PostgreSQL 连接"""
@@ -186,19 +261,36 @@ class DatabaseManager:
                     logger.warning(f"关闭数据库连接失败: {e}")
     
     def _get_mysql_connection(self, config: Dict[str, Any]):
-        """获取 MySQL 连接"""
+        """获取 MySQL 连接（使用增强驱动检测）"""
         if not MYSQL_AVAILABLE:
-            raise ImportError("MySQL 驱动未安装，请运行: pip install pymysql")
+            driver_status = "\n".join([f"  {name}: {'✅' if info['available'] else '❌'} {info.get('version', info.get('error', ''))}" 
+                                     for name, info in MYSQL_DRIVERS.items()])
+            raise ImportError(f"MySQL 驱动未安装或不可用:\n{driver_status}\n请运行: pip install pymysql mysql-connector-python")
         
-        return pymysql.connect(
-            host=config["host"],
-            port=config.get("port", 3306),
-            user=config["username"],
-            password=config["password"],
-            database=config["database"],
-            charset=config.get("charset", "utf8mb4"),
-            cursorclass=pymysql.cursors.DictCursor
-        )
+        driver_name, driver_module = get_preferred_mysql_driver()
+        
+        if driver_name == 'pymysql':
+            return driver_module.connect(
+                host=config["host"],
+                port=config.get("port", 3306),
+                user=config["username"],
+                password=config["password"],
+                database=config["database"],
+                charset=config.get("charset", "utf8mb4"),
+                cursorclass=driver_module.cursors.DictCursor
+            )
+        elif driver_name == 'mysql.connector':
+            return driver_module.connect(
+                host=config["host"],
+                port=config.get("port", 3306),
+                user=config["username"],
+                password=config["password"],
+                database=config["database"],
+                charset=config.get("charset", "utf8mb4"),
+                autocommit=True
+            )
+        else:
+            raise ImportError(f"不支持的MySQL驱动: {driver_name}")
     
     def _get_postgresql_connection(self, config: Dict[str, Any]):
         """获取 PostgreSQL 连接"""

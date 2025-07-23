@@ -6,7 +6,7 @@
       "port": 3306,
       "database": "example_db",
       "username": "user",
-      "password": "${MYSQL_EXAMPLE_PASSWORD}",
+      "password": "",
       "charset": "utf8mb4",
       "description": "示例MySQL数据库连接",
       "enabled": false
@@ -17,7 +17,7 @@
       "port": 5432,
       "database": "example_db",
       "username": "postgres",
-      "password": "${POSTGRES_EXAMPLE_PASSWORD}",
+      "password": "",
       "schema": "public",
       "description": "示例PostgreSQL数据库连接",
       "enabled": false
@@ -28,7 +28,7 @@
       "port": 27017,
       "database": "example_db",
       "username": "mongo_user",
-      "password": "${MONGO_EXAMPLE_PASSWORD}",
+      "password": "",
       "auth_source": "admin",
       "description": "示例MongoDB数据库连接",
       "enabled": false
@@ -50,6 +50,14 @@
   "security": {
     "allow_write_operations": false,
     "allowed_schemas": [],
-    "blocked_keywords": ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE"]
+    "blocked_keywords": [
+      "DROP",
+      "DELETE",
+      "UPDATE",
+      "INSERT",
+      "ALTER",
+      "CREATE",
+      "TRUNCATE"
+    ]
   }
 }
