@@ -1,0 +1,55 @@
+{
+  "databases": {
+    "mysql_example": {
+      "type": "mysql",
+      "host": "localhost",
+      "port": 3306,
+      "database": "example_db",
+      "username": "user",
+      "password": "${MYSQL_EXAMPLE_PASSWORD}",
+      "charset": "utf8mb4",
+      "description": "示例MySQL数据库连接",
+      "enabled": false
+    },
+    "postgres_example": {
+      "type": "postgresql",
+      "host": "localhost",
+      "port": 5432,
+      "database": "example_db",
+      "username": "postgres",
+      "password": "${POSTGRES_EXAMPLE_PASSWORD}",
+      "schema": "public",
+      "description": "示例PostgreSQL数据库连接",
+      "enabled": false
+    },
+    "mongo_example": {
+      "type": "mongodb",
+      "host": "localhost",
+      "port": 27017,
+      "database": "example_db",
+      "username": "mongo_user",
+      "password": "${MONGO_EXAMPLE_PASSWORD}",
+      "auth_source": "admin",
+      "description": "示例MongoDB数据库连接",
+      "enabled": false
+    },
+    "sqlite_example": {
+      "type": "sqlite",
+      "file_path": "data/example.db",
+      "description": "示例SQLite数据库连接",
+      "enabled": false
+    }
+  },
+  "default_limits": {
+    "query_timeout": 30,
+    "max_rows": 10000,
+    "connection_pool_size": 5,
+    "retry_attempts": 3,
+    "retry_delay": 1
+  },
+  "security": {
+    "allow_write_operations": false,
+    "allowed_schemas": [],
+    "blocked_keywords": ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE"]
+  }
+}

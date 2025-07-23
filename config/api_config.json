@@ -1,0 +1,149 @@
+{
+  "apis": {
+    "weather_api_example": {
+      "name": "天气API示例",
+      "base_url": "https://api.openweathermap.org/data/2.5",
+      "auth_type": "api_key",
+      "auth_config": {
+        "api_key": "${WEATHER_API_KEY}",
+        "key_param": "appid",
+        "key_location": "query"
+      },
+      "endpoints": {
+        "current_weather": {
+          "path": "/weather",
+          "method": "GET",
+          "params": {
+            "q": "city_name",
+            "units": "metric"
+          },
+          "description": "获取当前天气信息"
+        },
+        "forecast": {
+          "path": "/forecast",
+          "method": "GET",
+          "params": {
+            "q": "city_name",
+            "units": "metric",
+            "cnt": 5
+          },
+          "description": "获取天气预报"
+        }
+      },
+      "rate_limit": {
+        "requests_per_minute": 60,
+        "requests_per_day": 1000
+      },
+      "data_format": "json",
+      "description": "OpenWeatherMap API示例配置",
+      "enabled": false
+    },
+    "rest_api_example": {
+      "name": "REST API示例",
+      "base_url": "https://jsonplaceholder.typicode.com",
+      "auth_type": "none",
+      "auth_config": {},
+      "endpoints": {
+        "users": {
+          "path": "/users",
+          "method": "GET",
+          "description": "获取用户列表"
+        },
+        "posts": {
+          "path": "/posts",
+          "method": "GET",
+          "params": {
+            "userId": "user_id"
+          },
+          "description": "获取用户文章"
+        },
+        "comments": {
+          "path": "/comments",
+          "method": "GET",
+          "params": {
+            "postId": "post_id"
+          },
+          "description": "获取文章评论"
+        }
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "User-Agent": "SuperDataAnalysis-MCP/1.0"
+      },
+      "timeout": 30,
+      "retry_attempts": 3,
+      "data_format": "json",
+      "description": "JSONPlaceholder REST API示例",
+      "enabled": true
+    },
+    "basic_auth_example": {
+      "name": "Basic认证API示例",
+      "base_url": "https://httpbin.org",
+      "auth_type": "basic",
+      "auth_config": {
+        "username": "${API_USERNAME}",
+        "password": "${API_PASSWORD}"
+      },
+      "endpoints": {
+        "get_data": {
+          "path": "/basic-auth/user/passwd",
+          "method": "GET",
+          "description": "Basic认证测试"
+        }
+      },
+      "timeout": 30,
+      "data_format": "json",
+      "description": "Basic认证API示例",
+      "enabled": false
+    },
+    "custom_header_example": {
+      "name": "自定义Header API示例",
+      "base_url": "https://api.example.com",
+      "auth_type": "custom_header",
+      "auth_config": {
+        "headers": {
+          "X-API-Key": "${CUSTOM_API_KEY}",
+          "X-Client-ID": "${CLIENT_ID}"
+        }
+      },
+      "endpoints": {
+        "data": {
+          "path": "/data",
+          "method": "GET",
+          "description": "获取数据"
+        }
+      },
+      "timeout": 30,
+      "data_format": "json",
+      "description": "自定义Header认证API示例",
+      "enabled": false
+    }
+  },
+  "default_settings": {
+    "timeout": 30,
+    "retry_attempts": 3,
+    "retry_delay": 1,
+    "max_response_size": "10MB",
+    "follow_redirects": true,
+    "verify_ssl": true,
+    "user_agent": "SuperDataAnalysis-MCP/1.0"
+  },
+  "security": {
+    "allowed_domains": [],
+    "blocked_domains": [],
+    "require_https": false,
+    "max_redirects": 5,
+    "max_response_size_bytes": 10485760
+  },
+  "data_processing": {
+    "auto_flatten_json": true,
+    "max_nesting_level": 5,
+    "handle_pagination": true,
+    "pagination_config": {
+      "page_param": "page",
+      "limit_param": "limit",
+      "offset_param": "offset",
+      "max_pages": 100
+    }
+  }
+}
