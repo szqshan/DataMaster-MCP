@@ -3671,13 +3671,13 @@ def fetch_api_data(
     params: dict = None,
     data: dict = None,
     method: str = None,
-    output_format: str = "json",
     transform_config: dict = None,
-    persist_to_storage: bool = False,
     storage_session_id: str = None
 ) -> str:
     """
-    从API获取数据，支持持久化存储到临时数据库
+    从API获取数据并自动存储到数据库（方式二：自动持久化流程）
+    
+    注意：已删除方式一（手动流程），所有API数据默认直接存储到数据库
     
     Args:
         api_name: API名称
@@ -3685,13 +3685,11 @@ def fetch_api_data(
         params: 请求参数
         data: 请求数据（POST/PUT）
         method: HTTP方法
-        output_format: 输出格式 (json|csv|excel|dataframe|table)
         transform_config: 数据转换配置
-        persist_to_storage: 是否持久化存储到临时数据库
-        storage_session_id: 存储会话ID（persist_to_storage为True时必需）
+        storage_session_id: 存储会话ID（可选，不提供时自动创建）
     
     Returns:
-        str: API数据或存储结果
+        str: 数据存储结果和会话信息
     """
     try:
         if not api_name or not endpoint_name:
@@ -3727,8 +3725,7 @@ def fetch_api_data(
             }
             return f"❌ {error_info['friendly_message']}\n\n💡 解决建议:\n" + "\n".join([f"• {solution}" for solution in error_info['solutions']]) + f"\n\n🔧 技术详情:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
-        # 检查是否需要持久化存储
-        if persist_to_storage:
+        # 自动持久化存储（方式二：默认流程）
             if not storage_session_id:
                 # 自动创建存储会话
                 session_name = f"{api_name}_{endpoint_name}_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -3819,58 +3816,21 @@ def fetch_api_data(
             
             result = {
                 "status": "success",
-                "message": "API数据已持久化存储到临时数据库",
+                "message": "API数据已自动存储到数据库",
                 "data": {
                     "session_id": storage_session_id,
                     "api_name": api_name,
                     "endpoint_name": endpoint_name,
                     "stored_records": count,
                     "storage_message": storage_message
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "transform_applied": bool(transform_config),
+                    "auto_session_created": not storage_session_id
                 }
             }
-            return f"💾 数据已存储\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        
-        else:
-            # 直接返回数据（不持久化）
-            transform_success, transformed_data, transform_message = data_transformer.transform_data(
-                data=response_data,
-                output_format=output_format,
-                transform_config=transform_config or {}
-            )
-            
-            if not transform_success:
-                # 如果转换失败，返回原始数据
-                result = {
-                    "status": "partial_success",
-                    "message": f"API调用成功，但数据转换失败: {transform_message}",
-                    "data": {
-                        "api_name": api_name,
-                        "endpoint_name": endpoint_name,
-                        "raw_data": response_data,
-                        "format": "raw"
-                    },
-                    "metadata": {
-                        "timestamp": datetime.now().isoformat(),
-                        "requested_format": output_format
-                    }
-                }
-                return f"⚠️ 部分成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-            else:
-                result = {
-                    "status": "success",
-                    "message": f"API调用成功，数据已转换为{output_format}格式",
-                    "data": {
-                        "api_name": api_name,
-                        "endpoint_name": endpoint_name,
-                        "transformed_data": transformed_data,
-                        "format": output_format
-                    },
-                    "metadata": {
-                        "timestamp": datetime.now().isoformat(),
-                        "transform_message": transform_message
-                    }
-                }
-                return f"✅ API数据获取成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            return f"💾 数据已自动存储到数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
     
     except Exception as e:
         logger.error(f"获取API数据失败: {e}")
@@ -4103,129 +4063,9 @@ def create_api_storage_session(
         }
         return f"❌ 创建失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
-@mcp.tool()
-def store_api_data_to_session(
-    session_id: str,
-    api_name: str,
-    endpoint_name: str,
-    params: dict = None,
-    data: dict = None,
-    method: str = None,
-    transform_config: dict = None
-) -> str:
-    """
-    获取API数据并存储到会话中
-    
-    Args:
-        session_id: 存储会话ID
-        api_name: API名称
-        endpoint_name: 端点名称
-        params: 请求参数
-        data: 请求数据（POST/PUT）
-        method: HTTP方法
-        transform_config: 数据转换配置
-    
-    Returns:
-        str: 存储结果
-    """
-    try:
-        if not session_id or not api_name or not endpoint_name:
-            result = {
-                "status": "error",
-                "message": "存储API数据需要提供session_id、api_name和endpoint_name参数"
-            }
-            return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        
-        # 调用API获取数据
-        success, response_data, message = api_connector.call_api(
-            api_name=api_name,
-            endpoint_name=endpoint_name,
-            params=params or {},
-            data=data,
-            method=method
-        )
-        
-        if not success:
-            result = {
-                "status": "error",
-                "message": f"API调用失败: {message}",
-                "data": {
-                    "session_id": session_id,
-                    "api_name": api_name,
-                    "endpoint_name": endpoint_name
-                }
-            }
-            return f"❌ API调用失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        
-        # 数据转换（如果需要）
-        processed_data = None
-        if transform_config:
-            transform_success, transformed_data, transform_message = data_transformer.transform_data(
-                data=response_data,
-                output_format="json",
-                transform_config=transform_config
-            )
-            if transform_success:
-                processed_data = transformed_data
-        
-        # 存储数据
-        store_success, records_added, store_message = api_data_storage.store_api_data(
-            session_id=session_id,
-            raw_data=response_data,
-            processed_data=processed_data,
-            source_params={
-                "api_name": api_name,
-                "endpoint_name": endpoint_name,
-                "params": params,
-                "data": data,
-                "method": method,
-                "transform_config": transform_config
-            }
-        )
-        
-        if store_success:
-            result = {
-                "status": "success",
-                "message": f"API数据存储成功: {store_message}",
-                "data": {
-                    "session_id": session_id,
-                    "api_name": api_name,
-                    "endpoint_name": endpoint_name,
-                    "records_added": records_added,
-                    "has_processed_data": processed_data is not None
-                },
-                "metadata": {
-                    "timestamp": datetime.now().isoformat(),
-                    "api_call_success": True,
-                    "transform_applied": transform_config is not None
-                }
-            }
-            return f"✅ API数据存储成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        else:
-            result = {
-                "status": "error",
-                "message": f"数据存储失败: {store_message}",
-                "data": {
-                    "session_id": session_id,
-                    "api_name": api_name,
-                    "endpoint_name": endpoint_name
-                }
-            }
-            return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-    
-    except Exception as e:
-        logger.error(f"存储API数据失败: {e}")
-        result = {
-            "status": "error",
-            "message": f"存储API数据失败: {str(e)}",
-            "error_type": type(e).__name__,
-            "data": {
-                "session_id": session_id,
-                "api_name": api_name,
-                "endpoint_name": endpoint_name
-            }
-        }
-        return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+# store_api_data_to_session 函数已删除
+# 原因：与简化后的 fetch_api_data 功能重复
+# 现在所有 API 数据获取都通过 fetch_api_data 自动存储到数据库
 
 @mcp.tool()
 def execute_database_cleanup(
