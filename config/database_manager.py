@@ -210,11 +210,16 @@ class DatabaseManager:
         try:
             driver_name, driver_module = get_preferred_mysql_driver()
             
+            # 统一参数处理：支持 user 和 username 两种参数名
+            username = config.get("username") or config.get("user")
+            if not username:
+                return False, "缺少必需的配置字段: username (或 user)"
+            
             if driver_name == 'pymysql':
                 connection = driver_module.connect(
                     host=config["host"],
                     port=config.get("port", 3306),
-                    user=config.get("user", config.get("username")),
+                    user=username,
                     password=config["password"],
                     database=config["database"],
                     charset=config.get("charset", "utf8mb4"),
@@ -229,7 +234,7 @@ class DatabaseManager:
                 connection = driver_module.connect(
                     host=config["host"],
                     port=config.get("port", 3306),
-                    user=config.get("user", config.get("username")),
+                    user=username,
                     password=config["password"],
                     database=config["database"],
                     charset=config.get("charset", "utf8mb4"),
@@ -270,12 +275,17 @@ class DatabaseManager:
         except ImportError as e:
             return False, f"无法获取PostgreSQL驱动: {str(e)}"
         
+        # 统一参数处理：支持 user 和 username 两种参数名
+        username = config.get("username") or config.get("user")
+        if not username:
+            return False, "缺少必需的配置字段: username (或 user)"
+        
         # 测试连接
         try:
             connection = psycopg2_module.connect(
                 host=config["host"],
                 port=config.get("port", 5432),
-                user=config.get("user", config.get("username")),
+                user=username,
                 password=config["password"],
                 database=config["database"],
                 connect_timeout=10
@@ -374,11 +384,16 @@ class DatabaseManager:
         
         driver_name, driver_module = get_preferred_mysql_driver()
         
+        # 统一参数处理：支持 user 和 username 两种参数名
+        username = config.get("username") or config.get("user")
+        if not username:
+            raise ValueError("缺少必需的配置字段: username (或 user)")
+        
         if driver_name == 'pymysql':
             return driver_module.connect(
                 host=config["host"],
                 port=config.get("port", 3306),
-                user=config.get("user", config.get("username")),
+                user=username,
                 password=config["password"],
                 database=config["database"],
                 charset=config.get("charset", "utf8mb4"),
@@ -388,7 +403,7 @@ class DatabaseManager:
             return driver_module.connect(
                 host=config["host"],
                 port=config.get("port", 3306),
-                user=config.get("user", config.get("username")),
+                user=username,
                 password=config["password"],
                 database=config["database"],
                 charset=config.get("charset", "utf8mb4"),
@@ -413,10 +428,15 @@ class DatabaseManager:
         driver_name, psycopg2_module, extras = get_preferred_postgresql_driver()
         RealDictCursor = extras.get('RealDictCursor')
         
+        # 统一参数处理：支持 user 和 username 两种参数名
+        username = config.get("username") or config.get("user")
+        if not username:
+            raise ValueError("缺少必需的配置字段: username (或 user)")
+        
         connection = psycopg2_module.connect(
             host=config["host"],
             port=config.get("port", 5432),
-            user=config.get("user", config.get("username")),
+            user=username,
             password=config["password"],
             database=config["database"]
         )
@@ -744,7 +764,8 @@ class DatabaseManager:
                     if agg_start != -1 and agg_end != -1:
                         agg_pipeline = query[agg_start + 11:agg_end]
                         try:
-                            pipeline = json.loads(agg_pipeline)
+                            # 尝试多种解析方式
+                            pipeline = self._parse_mongodb_pipeline(agg_pipeline)
                             cursor = collection.aggregate(pipeline)
                             results = list(cursor)
                             
@@ -759,10 +780,10 @@ class DatabaseManager:
                                 "data": processed_results,
                                 "row_count": len(processed_results)
                             }
-                        except json.JSONDecodeError as e:
+                        except Exception as e:
                             return {
                                 "success": False,
-                                "error": f"无法解析聚合管道: {str(e)}",
+                                "error": f"无法解析聚合管道: {str(e)}\n原始管道: {agg_pipeline}",
                                 "data": []
                             }
             
@@ -853,6 +874,55 @@ class DatabaseManager:
             else:
                 prepared_doc[key] = value
         return prepared_doc
+    
+    def _parse_mongodb_pipeline(self, pipeline_str: str) -> list:
+        """解析MongoDB聚合管道，支持多种格式"""
+        # 清理字符串
+        pipeline_str = pipeline_str.strip()
+        
+        # 尝试直接JSON解析
+        try:
+            return json.loads(pipeline_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 尝试修复常见的JSON格式问题
+        try:
+            # 替换单引号为双引号
+            fixed_str = pipeline_str.replace("'", '"')
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 尝试处理JavaScript风格的对象
+        try:
+            import re
+            # 为未加引号的键添加引号
+            fixed_str = re.sub(r'(\w+)\s*:', r'"\1":', pipeline_str)
+            # 替换单引号为双引号
+            fixed_str = fixed_str.replace("'", '"')
+            return json.loads(fixed_str)
+        except (json.JSONDecodeError, ImportError):
+            pass
+        
+        # 尝试eval（仅用于简单情况，有安全风险但在受控环境下可用）
+        try:
+            # 只允许基本的数据结构
+            if all(char in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}:,"\' ._-$' for char in pipeline_str):
+                # 替换JavaScript风格的对象为Python字典
+                python_str = pipeline_str.replace('true', 'True').replace('false', 'False').replace('null', 'None')
+                result = eval(python_str)
+                if isinstance(result, list):
+                    return result
+        except:
+            pass
+        
+        # 如果所有方法都失败，抛出详细错误
+        raise ValueError(f"无法解析MongoDB聚合管道。支持的格式:\n" +
+                        "1. 标准JSON: [{\"$match\": {\"field\": \"value\"}}]\n" +
+                        "2. JavaScript风格: [{'$match': {'field': 'value'}}]\n" +
+                        "3. 无引号键: [{$match: {field: 'value'}}]\n" +
+                        f"实际输入: {pipeline_str}")
     
     def get_table_list(self, database_name: str) -> List[str]:
         """获取数据库中的表列表"""

@@ -1,41 +1,37 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+检查数据库状态
+"""
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from main import get_db_connection
 import sqlite3
-import pandas as pd
 
-# 查看数据库中的表
-conn = sqlite3.connect('data_analysis.db')
-cursor = conn.cursor()
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-tables = cursor.fetchall()
+def check_database():
+    """检查数据库状态"""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cursor.fetchall()
+            print('数据库中的表:', [t[0] for t in tables])
+            
+            # 如果有alarm_data_2025表，显示其内容
+            if 'alarm_data_2025' in [t[0] for t in tables]:
+                cursor = conn.execute('SELECT * FROM alarm_data_2025')
+                rows = cursor.fetchall()
+                print(f'\nalarm_data_2025表内容 ({len(rows)}行):')
+                for row in rows:
+                    print(row)
+            else:
+                print('\n❌ alarm_data_2025表不存在')
+                
+    except Exception as e:
+        print(f"检查数据库失败: {e}")
+        import traceback
+        traceback.print_exc()
 
-print("数据库中的表:")
-for table in tables:
-    print(f"- {table[0]}")
-
-# 创建一个简单的测试表
-print("\n创建测试表...")
-test_data = {
-    '姓名': ['张三', '李四', '王五'],
-    '部门': ['技术部', '销售部', '人事部'],
-    '工资': [8000, 6000, 7000]
-}
-
-df = pd.DataFrame(test_data)
-df.to_sql('编码测试', conn, if_exists='replace', index=False)
-print("测试表'编码测试'已创建")
-
-# 验证表是否创建成功
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-tables = cursor.fetchall()
-print("\n更新后的表列表:")
-for table in tables:
-    print(f"- {table[0]}")
-
-# 查看表内容
-print("\n表内容:")
-df_read = pd.read_sql('SELECT * FROM "编码测试"', conn)
-print(df_read)
-
-conn.close()
+if __name__ == "__main__":
+    check_database()

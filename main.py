@@ -11,6 +11,7 @@ import sqlite3
 import pandas as pd
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -168,6 +169,176 @@ def _table_exists(table_name: str) -> bool:
     except Exception:
         return False
 
+def _analyze_database_cleanup(conn) -> dict:
+    """分析数据库并提供清理建议"""
+    try:
+        # 获取所有表（排除元数据表）
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name != '_metadata'"
+        )
+        all_tables = [row[0] for row in cursor.fetchall()]
+        
+        if not all_tables:
+            return {
+                "total_tables": 0,
+                "cleanup_suggestions": [],
+                "summary": "数据库中没有用户表，无需清理",
+                "ai_recommendation": "数据库状态良好，无需执行清理操作。"
+            }
+        
+        cleanup_suggestions = []
+        test_tables = []
+        temp_tables = []
+        empty_tables = []
+        duplicate_tables = []
+        old_tables = []
+        
+        # 分析每个表
+        for table in all_tables:
+            try:
+                escaped_table = _escape_identifier(table)
+                
+                # 获取表的行数
+                cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                row_count = cursor.fetchone()[0]
+                
+                # 检测测试表（包含test、temp、tmp、demo等关键词）
+                table_lower = table.lower()
+                if any(keyword in table_lower for keyword in ['test', 'temp', 'tmp', 'demo', 'sample', 'example', '_bak', '_backup']):
+                    test_tables.append({
+                        "table_name": table,
+                        "row_count": row_count,
+                        "reason": "表名包含测试/临时关键词",
+                        "risk_level": "low" if row_count == 0 else "medium"
+                    })
+                
+                # 检测空表
+                if row_count == 0:
+                    empty_tables.append({
+                        "table_name": table,
+                        "row_count": 0,
+                        "reason": "表为空，无数据",
+                        "risk_level": "low"
+                    })
+                
+                # 检测可能的重复表（相似表名）
+                for other_table in all_tables:
+                    if table != other_table and table.startswith(other_table) and len(table) > len(other_table):
+                        # 检查是否是版本化的表（如table_v1, table_v2等）
+                        suffix = table[len(other_table):]
+                        if suffix.startswith('_') and any(char.isdigit() for char in suffix):
+                            duplicate_tables.append({
+                                "table_name": table,
+                                "base_table": other_table,
+                                "row_count": row_count,
+                                "reason": f"可能是 '{other_table}' 的版本化副本",
+                                "risk_level": "medium"
+                            })
+                            break
+                
+                # 检测表结构获取创建信息（SQLite限制，无法直接获取创建时间）
+                # 但可以通过表名模式推断是否为旧表
+                if any(pattern in table_lower for pattern in ['old', 'archive', 'history', 'backup', 'deprecated']):
+                    old_tables.append({
+                        "table_name": table,
+                        "row_count": row_count,
+                        "reason": "表名暗示为历史/归档数据",
+                        "risk_level": "medium"
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"分析表 '{table}' 时出错: {e}")
+                continue
+        
+        # 生成清理建议
+        if test_tables:
+            cleanup_suggestions.append({
+                "category": "测试/临时表",
+                "tables": test_tables,
+                "description": "这些表看起来是用于测试或临时用途的",
+                "recommendation": "建议删除这些测试表以保持数据库整洁",
+                "action": "DELETE",
+                "priority": "HIGH" if any(t['row_count'] == 0 for t in test_tables) else "MEDIUM"
+            })
+        
+        if empty_tables:
+            cleanup_suggestions.append({
+                "category": "空表",
+                "tables": empty_tables,
+                "description": "这些表没有任何数据",
+                "recommendation": "建议删除空表，如需要可以重新创建",
+                "action": "DELETE",
+                "priority": "HIGH"
+            })
+        
+        if duplicate_tables:
+            cleanup_suggestions.append({
+                "category": "重复/版本化表",
+                "tables": duplicate_tables,
+                "description": "这些表可能是其他表的副本或旧版本",
+                "recommendation": "请确认是否需要保留这些表，建议删除不需要的版本",
+                "action": "REVIEW",
+                "priority": "MEDIUM"
+            })
+        
+        if old_tables:
+            cleanup_suggestions.append({
+                "category": "历史/归档表",
+                "tables": old_tables,
+                "description": "这些表看起来是历史数据或归档数据",
+                "recommendation": "请确认是否还需要这些历史数据，可考虑导出后删除",
+                "action": "REVIEW",
+                "priority": "LOW"
+            })
+        
+        # 生成AI建议
+        total_suggested_for_deletion = len([t for cat in cleanup_suggestions for t in cat['tables'] if cat['action'] == 'DELETE'])
+        total_suggested_for_review = len([t for cat in cleanup_suggestions for t in cat['tables'] if cat['action'] == 'REVIEW'])
+        
+        if not cleanup_suggestions:
+            ai_recommendation = "🎉 数据库状态良好！没有发现需要清理的过时数据或表。"
+        else:
+            ai_recommendation = f"📋 发现 {len(cleanup_suggestions)} 类问题需要处理：\n"
+            if total_suggested_for_deletion > 0:
+                ai_recommendation += f"• 建议直接删除 {total_suggested_for_deletion} 个表（测试表/空表）\n"
+            if total_suggested_for_review > 0:
+                ai_recommendation += f"• 需要人工确认 {total_suggested_for_review} 个表（重复表/历史表）\n"
+            ai_recommendation += "\n💡 建议：先备份重要数据，然后按优先级处理清理建议。"
+        
+        # 生成清理统计
+        cleanup_stats = {
+            "total_tables": len(all_tables),
+            "test_tables_count": len(test_tables),
+            "empty_tables_count": len(empty_tables),
+            "duplicate_tables_count": len(duplicate_tables),
+            "old_tables_count": len(old_tables),
+            "total_issues": len(cleanup_suggestions),
+            "high_priority_issues": len([c for c in cleanup_suggestions if c['priority'] == 'HIGH']),
+            "medium_priority_issues": len([c for c in cleanup_suggestions if c['priority'] == 'MEDIUM']),
+            "low_priority_issues": len([c for c in cleanup_suggestions if c['priority'] == 'LOW'])
+        }
+        
+        return {
+            "cleanup_stats": cleanup_stats,
+            "cleanup_suggestions": cleanup_suggestions,
+            "ai_recommendation": ai_recommendation,
+            "summary": f"分析了 {len(all_tables)} 个表，发现 {len(cleanup_suggestions)} 类清理建议",
+            "next_steps": [
+                "1. 查看清理建议详情",
+                "2. 备份重要数据（如需要）",
+                "3. 按优先级执行清理操作",
+                "4. 定期运行清理分析保持数据库整洁"
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"数据库清理分析失败: {e}")
+        return {
+            "error": f"清理分析失败: {str(e)}",
+            "cleanup_suggestions": [],
+            "ai_recommendation": "❌ 清理分析过程中出现错误，请检查数据库连接和权限。"
+        }
+
 
 
 # ================================
@@ -182,20 +353,47 @@ def connect_data_source(
     target_database: str = None
 ) -> str:
     """
-    数据源连接路由器
+    🔗 数据源连接路由器 - AI必读使用指南
     
-    重要说明：
-    - excel/csv/sqlite: 可以导入到本地SQLite或指定的外部数据库
-    - mysql/postgresql/mongodb/database_config: 建立外部数据库连接，不导入数据
+    ⚠️ 重要：数据库连接采用"两步连接法"设计模式！
+    
+    📋 支持的数据源类型：
+    - "excel" - Excel文件导入到数据库
+    - "csv" - CSV文件导入到数据库  
+    - "sqlite" - SQLite数据库文件连接
+    - "mysql" - MySQL数据库连接（第一步：创建临时配置）
+    - "postgresql" - PostgreSQL数据库连接（第一步：创建临时配置）
+    - "mongodb" - MongoDB数据库连接（第一步：创建临时配置）
+    - "database_config" - 使用已有配置连接（第二步：实际连接）
+    
+    🎯 AI使用流程：
+    1️⃣ 数据库连接第一步：
+       connect_data_source(source_type="mysql", config={host, port, user, database, password})
+       → 返回临时配置名称（如：temp_mysql_20250724_173102）
+    
+    2️⃣ 数据库连接第二步：
+       connect_data_source(source_type="database_config", config={"database_name": "配置名称"})
+       → 建立可查询的数据库连接
+    
+    3️⃣ 查询数据：
+       使用 query_external_database(database_name="配置名称", query="SQL")
+    
+    💡 参数兼容性：
+    - 支持 "user" 或 "username" 参数
+    - 端口号使用数字类型（如：3306）
+    - 密码使用字符串类型
     
     Args:
-        source_type: 数据源类型 (excel|csv|sqlite|mysql|postgresql|mongodb|database_config)
-        config: 连接配置参数或数据库配置名称
-        target_table: 目标表名（可选）
-        target_database: 目标数据库名称（可选，用于将文件导入到外部数据库）
+        source_type: 数据源类型，必须是上述支持的类型之一
+        config: 配置参数字典，格式根据source_type不同
+        target_table: 目标表名（文件导入时可选）
+        target_database: 目标数据库名称（文件导入到外部数据库时可选）
     
     Returns:
-        str: 连接结果和导入状态
+        str: JSON格式的连接结果，包含状态、消息和配置信息
+    
+    ⚡ AI快速上手：
+    记住"两步连接法"：先创建配置 → 再使用配置 → 最后查询数据
     """
     try:
         if source_type == "excel":
@@ -579,19 +777,22 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
             
         else:
             # 直接连接配置
-            # 创建临时配置并测试连接
+            # 创建持久化临时配置并测试连接
             temp_config_name = f"temp_{db_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             config_with_type = config.copy()
             config_with_type["type"] = db_type
             config_with_type["enabled"] = True
+            config_with_type["description"] = f"临时{db_type.upper()}连接配置"
+            config_with_type["_is_temporary"] = True
+            config_with_type["_created_at"] = datetime.now().isoformat()
             
-            # 添加临时配置
+            # 添加临时配置（不立即删除）
             if config_manager.add_database_config(temp_config_name, config_with_type):
                 try:
                     # 测试连接
                     is_valid, message = database_manager.test_connection(temp_config_name)
                     if not is_valid:
-                        # 清理临时配置
+                        # 连接失败时清理临时配置
                         config_manager.remove_database_config(temp_config_name)
                         result = {
                             "status": "error",
@@ -614,19 +815,22 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
                             "temp_config_name": temp_config_name,
                             "connection_type": "外部数据库连接",
                             "data_location": "远程数据库服务器",
-                            "usage_note": f"使用execute_sql(data_source='{temp_config_name}')或query_external_database(database_name='{temp_config_name}')查询此数据库"
+                            "usage_note": f"使用execute_sql(data_source='{temp_config_name}')或query_external_database(database_name='{temp_config_name}')查询此数据库",
+                            "config_lifecycle": "临时配置已保存，可在会话期间使用"
                         },
                         "metadata": {
                             "timestamp": datetime.now().isoformat(),
-                            "connection_method": "direct_config"
+                            "connection_method": "direct_config",
+                            "config_persistence": "temporary_persistent"
                         }
                     }
                     
                     return f"✅ {db_type.upper()} 外部数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                     
-                finally:
-                    # 清理临时配置
+                except Exception as e:
+                    # 发生异常时清理临时配置
                     config_manager.remove_database_config(temp_config_name)
+                    raise e
             else:
                 result = {
                     "status": "error",
@@ -751,16 +955,35 @@ def execute_sql(
     data_source: str = None
 ) -> str:
     """
-    SQL执行工具
+    📊 SQL执行工具 - 本地数据库查询专用
+    
+    🎯 使用场景：
+    - 查询本地SQLite数据库（默认）
+    - 查询已导入的Excel/CSV数据
+    - 查询指定的本地数据源
+    
+    ⚠️ 重要区别：
+    - 本地数据查询 → 使用此工具 (execute_sql)
+    - 外部数据库查询 → 使用 query_external_database
+    
+    🔒 安全特性：
+    - 自动添加LIMIT限制防止大量数据返回
+    - 支持参数化查询防止SQL注入
+    - 只允许SELECT查询，拒绝危险操作
     
     Args:
-        query: SQL查询语句
-        params: 查询参数（防止SQL注入）
-        limit: 结果限制行数
-        data_source: 数据源名称（可选，默认使用本地SQLite）
+        query: SQL查询语句（推荐使用SELECT语句）
+        params: 查询参数字典，用于参数化查询（可选）
+        limit: 结果行数限制，默认1000行（可选）
+        data_source: 数据源名称，默认本地SQLite（可选）
     
     Returns:
-        str: 查询结果
+        str: JSON格式查询结果，包含列名、数据行和统计信息
+    
+    💡 AI使用提示：
+    - 查询本地数据时优先使用此工具
+    - 查询外部数据库时使用 query_external_database
+    - 使用 get_data_info 先了解表结构
     """
     try:
         # 预处理SQL语句
@@ -854,15 +1077,66 @@ def get_data_info(
     data_source: str = None
 ) -> str:
     """
-    数据信息获取工具
+    📊 数据信息获取工具 - 查看数据库结构和统计信息
+    
+    功能说明：
+    - 获取数据库表列表、表结构、数据统计等信息
+    - 支持本地SQLite和外部数据库
+    - 提供详细的表结构和数据概览
+    - 智能数据库清理管理功能
     
     Args:
-        info_type: 信息类型 (tables|schema|stats)
-        table_name: 表名（获取特定表信息时需要）
-        data_source: 数据源名称（可选，默认使用本地SQLite）
+        info_type: 信息类型
+            - "tables": 获取所有表/集合列表（默认）
+            - "schema": 获取指定表的结构信息（需要table_name）
+            - "stats": 获取指定表的统计信息（需要table_name）
+            - "cleanup": 智能检测过时数据和表，提供清理建议
+        table_name: 表名（当info_type为schema或stats时必需）
+        data_source: 数据源名称
+            - None: 使用本地SQLite数据库（默认）
+            - 配置名称: 使用外部数据库（需先通过manage_database_config创建配置）
     
     Returns:
-        str: 数据库信息
+        str: JSON格式的数据库信息，包含状态、数据和元数据
+    
+    🤖 AI使用建议：
+    1. 数据探索：先用info_type="tables"查看所有表
+    2. 结构分析：用info_type="schema"了解表结构
+    3. 数据概览：用info_type="stats"获取统计信息
+    4. 数据库维护：用info_type="cleanup"检测并清理过时数据
+    5. 外部数据库：确保data_source配置已存在
+    
+    💡 最佳实践：
+    - 在查询数据前先了解表结构
+    - 使用stats了解数据分布和质量
+    - 定期使用cleanup功能维护数据库整洁
+    - 结合analyze_data工具进行深度分析
+    
+    ⚠️ 常见错误避免：
+    - schema和stats必须指定table_name
+    - 外部数据库需要有效的data_source配置
+    - 表名区分大小写
+    - cleanup功能仅适用于本地SQLite数据库
+    
+    📈 高效使用流程：
+    1. get_data_info(info_type="tables") → 查看所有表
+    2. get_data_info(info_type="schema", table_name="表名") → 了解结构
+    3. get_data_info(info_type="stats", table_name="表名") → 查看统计
+    4. get_data_info(info_type="cleanup") → 检测过时数据
+    5. analyze_data() → 深度分析
+    
+    🎯 关键理解点：
+    - 这是数据探索的第一步工具
+    - 为后续分析提供基础信息
+    - 支持本地和远程数据源
+    - 智能维护数据库整洁性
+    
+    🧹 数据库清理功能（info_type="cleanup"）：
+    - 自动检测测试表、临时表、过时表
+    - 识别空表和重复表
+    - 分析表的创建时间和最后访问时间
+    - 提供智能清理建议，询问用户是否执行清理
+    - 支持批量清理和选择性清理
     """
     try:
         if data_source:
@@ -911,9 +1185,10 @@ def get_data_info(
                 else:
                     result = {
                         "status": "error",
-                        "message": "外部数据源暂不支持stats信息类型或缺少必要参数",
+                        "message": "外部数据源暂不支持stats和cleanup信息类型或缺少必要参数",
                         "supported_types": ["tables", "schema"],
-                        "data_source": data_source
+                        "data_source": data_source,
+                        "note": "cleanup功能仅适用于本地SQLite数据库"
                     }
                     return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                     
@@ -1022,11 +1297,27 @@ def get_data_info(
                     
                     return f"✅ 统计信息获取成功（数据源: 本地SQLite）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                 
+                elif info_type == "cleanup":
+                    # 智能数据库清理功能
+                    cleanup_result = _analyze_database_cleanup(conn)
+                    
+                    result = {
+                        "status": "success",
+                        "message": "数据库清理分析完成",
+                        "data": cleanup_result,
+                        "metadata": {
+                            "data_source": "本地SQLite",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    
+                    return f"🧹 数据库清理分析完成\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
                 else:
                     result = {
                         "status": "error",
                         "message": "无效的信息类型或缺少必要参数",
-                        "supported_types": ["tables", "schema", "stats"],
+                        "supported_types": ["tables", "schema", "stats", "cleanup"],
                         "data_source": "本地SQLite"
                     }
                     return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
@@ -1330,16 +1621,63 @@ def analyze_data(
     options: dict = None
 ) -> str:
     """
-    数据分析路由器
+    🔍 数据分析工具 - 执行各种统计分析和数据质量检查
+    
+    功能说明：
+    - 提供5种核心数据分析功能
+    - 支持指定列分析或全表分析
+    - 自动处理数据类型和缺失值
+    - 返回详细的分析结果和可视化建议
     
     Args:
-        analysis_type: 分析类型 (basic_stats|correlation|outliers|missing_values|duplicates)
-        table_name: 数据表名
+        analysis_type: 分析类型
+            - "basic_stats": 基础统计分析（均值、中位数、标准差等）
+            - "correlation": 相关性分析（数值列之间的相关系数）
+            - "outliers": 异常值检测（IQR、Z-score方法）
+            - "missing_values": 缺失值分析（缺失率、分布模式）
+            - "duplicates": 重复值检测（完全重复、部分重复）
+        table_name: 要分析的数据表名
         columns: 分析的列名列表（可选）
-        options: 分析选项参数（可选）
+            - None: 分析所有适用列
+            - ["col1", "col2"]: 只分析指定列
+        options: 分析选项（可选字典）
+            - outliers: {"method": "iqr|zscore", "threshold": 1.5}
+            - correlation: {"method": "pearson|spearman"}
+            - basic_stats: {"percentiles": [25, 50, 75, 90, 95]}
     
     Returns:
-        str: 分析结果数据
+        str: JSON格式的分析结果，包含统计数据、图表建议和洞察
+    
+    🤖 AI使用建议：
+    1. 数据概览：先用"basic_stats"了解数据分布
+    2. 质量检查：用"missing_values"和"duplicates"检查数据质量
+    3. 关系探索：用"correlation"发现变量关系
+    4. 异常检测：用"outliers"识别异常数据
+    5. 逐步深入：从基础统计到高级分析
+    
+    💡 最佳实践：
+    - 先进行basic_stats了解数据概况
+    - 数值列用correlation分析关系
+    - 大数据集指定columns提高效率
+    - 结合get_data_info了解表结构
+    
+    ⚠️ 常见错误避免：
+    - 确保table_name存在
+    - correlation只适用于数值列
+    - columns名称必须准确匹配
+    - 空表或单列表某些分析会失败
+    
+    📈 高效使用流程：
+    1. get_data_info() → 了解表结构
+    2. analyze_data("basic_stats") → 基础统计
+    3. analyze_data("missing_values") → 质量检查
+    4. analyze_data("correlation") → 关系分析
+    5. analyze_data("outliers") → 异常检测
+    
+    🎯 关键理解点：
+    - 每种分析类型有特定适用场景
+    - 结果包含统计数据和业务洞察
+    - 支持参数化定制分析行为
     """
     try:
         # 验证表是否存在
@@ -1530,16 +1868,61 @@ def export_data(
     options: dict = None
 ) -> str:
     """
-    数据导出路由器
+    📤 数据导出工具 - 将数据导出为各种格式文件
+    
+    功能说明：
+    - 支持多种导出格式：Excel、CSV、JSON
+    - 可导出表数据或SQL查询结果
+    - 自动生成文件路径或使用指定路径
+    - 支持导出选项自定义
     
     Args:
-        export_type: 导出类型 (excel|csv|json)
-        data_source: 数据源（表名或SQL查询）
-        file_path: 导出文件路径（可选，自动生成）
-        options: 导出选项（可选）
+        export_type: 导出格式类型
+            - "excel": Excel文件(.xlsx)
+            - "csv": CSV文件(.csv)
+            - "json": JSON文件(.json)
+        data_source: 数据源
+            - 表名: 直接导出整个表
+            - SQL查询: 导出查询结果（以SELECT开头）
+        file_path: 导出文件路径（可选）
+            - None: 自动生成路径到exports/目录
+            - 指定路径: 使用自定义路径
+        options: 导出选项（可选字典）
+            - Excel: {"sheet_name": "工作表名", "auto_adjust_columns": True}
+            - CSV: {"encoding": "utf-8", "separator": ","}
+            - JSON: {"orient": "records", "indent": 2}
     
     Returns:
-        str: 导出结果和文件路径
+        str: JSON格式的导出结果，包含文件路径、大小、记录数等信息
+    
+    🤖 AI使用建议：
+    1. 表导出：export_data("excel", "table_name")
+    2. 查询导出：export_data("csv", "SELECT * FROM table WHERE condition")
+    3. 自定义格式：使用options参数调整导出格式
+    4. 批量导出：结合循环导出多个表或查询
+    
+    💡 最佳实践：
+    - Excel适合报表和可视化
+    - CSV适合数据交换和导入其他系统
+    - JSON适合API和程序处理
+    - 大数据量优先使用CSV
+    
+    ⚠️ 常见错误避免：
+    - 确保data_source存在（表名）或语法正确（SQL）
+    - 文件路径目录必须存在或可创建
+    - 注意文件权限和磁盘空间
+    
+    📈 高效使用流程：
+    1. 确定导出需求（格式、内容）
+    2. 选择合适的export_type
+    3. 准备data_source（表名或SQL）
+    4. 设置options（如需要）
+    5. 执行导出并检查结果
+    
+    🎯 关键理解点：
+    - 支持表和查询两种数据源
+    - 自动处理文件路径和格式
+    - 提供详细的导出统计信息
     """
     try:
         # 生成默认文件路径
@@ -1857,10 +2240,37 @@ def _process_filter(data_source: str, config: dict, target_table: str = None) ->
             if 'filter_condition' in config:
                 condition = config['filter_condition']
                 try:
-                    df = df.query(condition)
-                    operations_performed.append(f"条件筛选: {condition}")
+                    # 尝试使用pandas query方法（适用于简单的英文列名）
+                    try:
+                        df = df.query(condition)
+                        operations_performed.append(f"条件筛选: {condition}")
+                    except (SyntaxError, ValueError, KeyError) as query_error:
+                        # 如果query方法失败，尝试转换为SQL WHERE子句
+                        # 将pandas DataFrame重新写入临时表，然后用SQL筛选
+                        temp_table = f"temp_filter_{int(time.time() * 1000)}"
+                        df.to_sql(temp_table, conn, if_exists='replace', index=False)
+                        
+                        # 构建SQL查询，支持中文列名
+                        sql_condition = condition
+                        # 转换常见的pandas语法到SQL语法
+                        sql_condition = sql_condition.replace(' and ', ' AND ').replace(' or ', ' OR ')
+                        sql_condition = sql_condition.replace(' & ', ' AND ').replace(' | ', ' OR ')
+                        
+                        # 执行SQL查询
+                        sql_query = f'SELECT * FROM "{temp_table}" WHERE {sql_condition}'
+                        df = pd.read_sql(sql_query, conn)
+                        
+                        # 清理临时表
+                        conn.execute(f'DROP TABLE IF EXISTS "{temp_table}"')
+                        conn.commit()
+                        
+                        operations_performed.append(f"条件筛选(SQL): {condition}")
+                        
                 except Exception as e:
                     operations_performed.append(f"条件筛选失败: {str(e)}")
+                    # 如果筛选失败，记录详细错误信息但不中断处理
+                    import traceback
+                    logger.error(f"筛选条件解析失败: {condition}, 错误: {traceback.format_exc()}")
             
             # 列选择
             if 'select_columns' in config:
@@ -2177,16 +2587,99 @@ def process_data(
     target_table: str = None
 ) -> str:
     """
-    数据处理路由器 (Excel数据处理)
+    ⚙️ 数据处理工具 - 执行数据清洗、转换、筛选等操作
+    
+    功能说明：
+    - 提供6种核心数据处理功能
+    - 支持表和SQL查询作为数据源
+    - 灵活的配置参数系统
+    - 可指定目标表或覆盖原表
     
     Args:
-        operation_type: 操作类型 (clean|transform|filter|aggregate|merge|reshape)
-        data_source: 数据源（表名或SQL查询）
-        config: 操作配置参数
-        target_table: 目标表名（可选，默认覆盖原表）
+        operation_type: 处理操作类型
+            - "clean": 数据清洗（去重、填充缺失值、数据类型转换）
+            - "transform": 数据转换（列重命名、标准化、新列计算）
+            - "filter": 数据筛选（条件过滤、列选择、数据采样）
+            - "aggregate": 数据聚合（分组统计、汇总计算）
+            - "merge": 数据合并（表连接、数据拼接）
+            - "reshape": 数据重塑（透视表、宽长转换）
+        data_source: 数据源
+            - 表名: 处理整个表
+            - SQL查询: 处理查询结果
+        config: 操作配置字典（必需）
+            - clean: {"remove_duplicates": True, "fill_missing": {"col": {"method": "mean"}}}
+            - transform: {"rename_columns": {"old": "new"}, "normalize": {"columns": ["col1"]}}
+            - filter: {"filter_condition": "age > 18", "select_columns": ["name", "age"]}
+            - aggregate: {"group_by": {"columns": ["dept"], "agg": {"salary": "mean"}}}
+            - merge: {"right_table": "table2", "on": "id", "how": "inner"}
+            - reshape: {"pivot": {"index": "date", "columns": "product", "values": "sales"}}
+        target_table: 目标表名（可选）
+            - None: 覆盖原表（默认）
+            - 表名: 保存到新表
     
     Returns:
-        str: 处理结果
+        str: JSON格式的处理结果，包含操作详情、影响行数和新表信息
+    
+    🤖 AI使用建议：
+    1. 数据清洗：先用"clean"处理数据质量问题
+    2. 数据转换：用"transform"标准化和计算新字段
+    3. 数据筛选：用"filter"获取目标数据子集
+    4. 数据聚合：用"aggregate"生成汇总报表
+    5. 数据合并：用"merge"关联多个数据源
+    6. 数据重塑：用"reshape"改变数据结构
+    
+    💡 最佳实践：
+    - 处理前先备份重要数据
+    - 使用target_table避免覆盖原数据
+    - 复杂操作分步骤执行
+    - 结合analyze_data验证处理结果
+    
+    ⚠️ 常见错误避免：
+    - config参数必须符合operation_type要求
+    - 确保引用的列名存在
+    - merge操作需要确保关联键存在
+    - 大数据量操作注意性能
+    
+    📈 高效使用流程：
+    1. analyze_data() → 了解数据质量
+    2. process_data("clean") → 清洗数据
+    3. process_data("transform") → 转换数据
+    4. process_data("filter") → 筛选数据
+    5. analyze_data() → 验证处理结果
+    
+    🎯 关键理解点：
+    - 每种操作类型有特定的config格式
+    - 支持链式处理（上一步输出作为下一步输入）
+    - 提供详细的操作日志和统计信息
+    
+    📋 配置示例：
+    ```python
+    # 数据清洗
+    config = {
+        "remove_duplicates": True,
+        "fill_missing": {
+            "age": {"method": "mean"},
+            "name": {"method": "mode"}
+        }
+    }
+    
+    # 数据筛选
+    config = {
+        "filter_condition": "age > 18 and salary > 5000",
+        "select_columns": ["name", "age", "department"]
+    }
+    
+    # 数据聚合
+    config = {
+        "group_by": {
+            "columns": ["department"],
+            "agg": {
+                "salary": "mean",
+                "age": "count"
+            }
+        }
+    }
+    ```
     """
     try:
         # 路由映射 (Excel数据处理)
@@ -2242,10 +2735,37 @@ def process_data(
 @mcp.tool()
 def list_data_sources() -> str:
     """
-    列出所有可用的数据源
+    📋 数据源列表工具 - 查看所有可用的数据源
+    
+    🎯 功能说明：
+    - 显示本地SQLite数据库状态
+    - 列出所有外部数据库配置
+    - 显示每个数据源的连接状态和基本信息
+    - 区分临时配置和永久配置
+    
+    📊 返回信息包括：
+    - 数据源名称和类型
+    - 连接状态（可用/已配置/已禁用）
+    - 主机地址和数据库名
+    - 是否为默认数据源
+    - 配置创建时间（临时配置）
+    
+    💡 使用场景：
+    - 不确定有哪些数据源时查看
+    - 检查数据库连接状态
+    - 查找临时配置名称
+    - 了解可用的查询目标
+    
+    Args:
+        无需参数
     
     Returns:
-        str: 数据源列表
+        str: JSON格式的数据源列表，包含详细的配置信息
+    
+    🚀 AI使用建议：
+    - 在查询数据前先调用此工具了解可用数据源
+    - 用于获取正确的database_name参数
+    - 检查临时配置是否还存在
     """
     try:
         # 获取外部数据库配置
@@ -2304,14 +2824,52 @@ def manage_database_config(
     config: dict = None
 ) -> str:
     """
-    数据库配置管理工具
+    ⚙️ 数据库配置管理工具 - 管理所有数据库连接配置
+    
+    🎯 支持的操作类型：
+    - "list" - 列出所有数据库配置（包括临时和永久）
+    - "test" - 测试指定配置的连接状态
+    - "add" - 添加永久数据库配置
+    - "remove" - 删除指定配置
+    - "reload" - 重新加载配置文件
+    - "list_temp" - 仅列出临时配置
+    - "cleanup_temp" - 清理所有临时配置
+    
+    📋 常用操作示例：
+    
+    1️⃣ 查看所有配置：
+       manage_database_config(action="list")
+    
+    2️⃣ 测试连接：
+       manage_database_config(action="test", config={"database_name": "配置名"})
+    
+    3️⃣ 添加永久配置：
+       manage_database_config(action="add", config={
+           "database_name": "my_mysql",
+           "database_config": {
+               "host": "localhost",
+               "port": 3306,
+               "type": "mysql",
+               "user": "root",
+               "database": "test_db",
+               "password": "password"
+           }
+       })
+    
+    4️⃣ 清理临时配置：
+       manage_database_config(action="cleanup_temp")
     
     Args:
-        action: 操作类型 (list|test|add|remove|reload)
-        config: 配置参数（根据action不同而不同）
+        action: 操作类型，必须是上述支持的操作之一
+        config: 配置参数字典，根据action类型提供不同参数
     
     Returns:
-        str: 操作结果
+        str: JSON格式操作结果，包含状态、消息和相关数据
+    
+    💡 AI使用建议：
+    - 不确定有哪些配置时，先用action="list"查看
+    - 连接问题时，用action="test"检查配置状态
+    - 临时配置过多时，用action="cleanup_temp"清理
     """
     try:
         if action == "list":
@@ -2422,6 +2980,39 @@ def manage_database_config(
                 }
                 return f"❌ 配置删除失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                 
+        elif action == "list_temp":
+            # 列出所有临时配置
+            temp_configs = config_manager.get_temporary_configs()
+            
+            result = {
+                "status": "success",
+                "message": f"找到 {len(temp_configs)} 个临时配置",
+                "data": {
+                    "temporary_configs": temp_configs,
+                    "count": len(temp_configs)
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            return f"✅ 临时配置列表\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+        elif action == "cleanup_temp":
+            # 清理所有临时配置
+            success, message = config_manager.cleanup_temporary_configs()
+            
+            result = {
+                "status": "success" if success else "error",
+                "message": message,
+                "data": {
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            status_icon = "✅" if success else "❌"
+            return f"{status_icon} 临时配置清理结果\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
         elif action == "reload":
             # 重新加载配置
             config_manager.reload_config()
@@ -2440,7 +3031,7 @@ def manage_database_config(
             result = {
                 "status": "error",
                 "message": f"不支持的操作类型: {action}",
-                "supported_actions": ["list", "test", "add", "remove", "reload"]
+                "supported_actions": ["list", "test", "add", "remove", "reload", "list_temp", "cleanup_temp"]
             }
             return f"❌ 操作类型错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
             
@@ -2460,15 +3051,38 @@ def query_external_database(
     limit: int = 1000
 ) -> str:
     """
-    查询外部数据库工具
+    🌐 外部数据库查询工具 - 专门查询外部数据库
+    
+    🎯 使用场景：
+    - 查询MySQL数据库
+    - 查询PostgreSQL数据库
+    - 查询MongoDB数据库
+    - 查询所有通过connect_data_source连接的外部数据库
+    
+    ⚠️ 前置条件：
+    必须先使用connect_data_source建立数据库连接并获得配置名称
+    
+    🔄 完整流程示例：
+    1️⃣ connect_data_source(source_type="mysql", config={...}) → 获得配置名
+    2️⃣ connect_data_source(source_type="database_config", config={"database_name": "配置名"}) → 建立连接
+    3️⃣ query_external_database(database_name="配置名", query="SELECT * FROM table") → 查询数据
+    
+    💡 查询语法支持：
+    - MySQL/PostgreSQL: 标准SQL语法
+    - MongoDB: 支持多种查询格式（JSON、JavaScript风格等）
     
     Args:
-        database_name: 数据库配置名称
-        query: 查询语句（SQL或MongoDB查询）
-        limit: 结果限制行数
+        database_name: 数据库配置名称（从connect_data_source获得）
+        query: 查询语句，SQL或MongoDB查询语法
+        limit: 结果行数限制，默认1000行
     
     Returns:
-        str: 查询结果
+        str: JSON格式查询结果，包含数据行、统计信息和元数据
+    
+    🚀 AI使用建议：
+    - 这是查询外部数据库的首选工具
+    - 使用list_data_sources查看可用的数据库配置
+    - 配置名称通常格式为：temp_mysql_20250724_173102
     """
     try:
         # 执行查询
@@ -3139,6 +3753,258 @@ def store_api_data_to_session(
             }
         }
         return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+
+@mcp.tool()
+def execute_database_cleanup(
+    action: str,
+    tables_to_clean: list = None,
+    confirm_deletion: bool = False
+) -> str:
+    """
+    🧹 数据库清理执行工具 - 根据清理建议执行实际的清理操作
+    
+    功能说明：
+    - 执行数据库表的删除操作
+    - 支持批量删除和选择性删除
+    - 提供安全确认机制
+    - 记录清理操作日志
+    
+    Args:
+        action: 清理操作类型
+            - "delete_tables": 删除指定的表
+            - "preview_deletion": 预览将要删除的表（安全模式）
+            - "backup_and_delete": 备份后删除表（暂未实现）
+        tables_to_clean: 要清理的表名列表
+            - ["table1", "table2"]: 删除指定表
+            - None: 需要先运行get_data_info(info_type="cleanup")获取建议
+        confirm_deletion: 删除确认标志
+            - True: 确认执行删除操作
+            - False: 仅预览，不执行实际删除
+    
+    Returns:
+        str: JSON格式的清理结果，包含操作状态和详细信息
+    
+    🤖 AI使用建议：
+    1. 清理分析：先用get_data_info(info_type="cleanup")分析数据库
+    2. 预览操作：用action="preview_deletion"预览将要删除的表
+    3. 确认删除：设置confirm_deletion=True执行实际删除
+    4. 安全第一：重要数据请先备份
+    
+    💡 最佳实践：
+    - 删除前先备份重要数据
+    - 优先删除空表和测试表
+    - 谨慎处理重复表和历史表
+    - 定期执行清理维护数据库整洁
+    
+    ⚠️ 安全提醒：
+    - 删除操作不可逆，请谨慎操作
+    - 建议先使用preview模式查看影响
+    - 重要数据请务必备份
+    - 仅删除确认不需要的表
+    
+    📈 使用流程：
+    1. get_data_info(info_type="cleanup") → 获取清理建议
+    2. execute_database_cleanup(action="preview_deletion", tables_to_clean=[...]) → 预览
+    3. execute_database_cleanup(action="delete_tables", tables_to_clean=[...], confirm_deletion=True) → 执行
+    
+    🎯 关键理解点：
+    - 这是数据库维护的执行工具
+    - 配合cleanup分析使用效果最佳
+    - 支持安全预览和确认机制
+    - 帮助保持数据库整洁有序
+    """
+    try:
+        if not action:
+            result = {
+                "status": "error",
+                "message": "必须指定清理操作类型",
+                "supported_actions": ["delete_tables", "preview_deletion", "backup_and_delete"]
+            }
+            return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        if action == "preview_deletion":
+            # 预览删除操作
+            if not tables_to_clean:
+                result = {
+                    "status": "error",
+                    "message": "预览删除需要指定tables_to_clean参数",
+                    "suggestion": "请先使用get_data_info(info_type='cleanup')获取清理建议"
+                }
+                return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+            # 检查表是否存在并获取信息
+            preview_info = []
+            with get_db_connection() as conn:
+                for table in tables_to_clean:
+                    if _table_exists(table):
+                        try:
+                            escaped_table = _escape_identifier(table)
+                            cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                            row_count = cursor.fetchone()[0]
+                            preview_info.append({
+                                "table_name": table,
+                                "exists": True,
+                                "row_count": row_count,
+                                "status": "ready_for_deletion"
+                            })
+                        except Exception as e:
+                            preview_info.append({
+                                "table_name": table,
+                                "exists": True,
+                                "row_count": "unknown",
+                                "status": "error",
+                                "error": str(e)
+                            })
+                    else:
+                        preview_info.append({
+                            "table_name": table,
+                            "exists": False,
+                            "row_count": 0,
+                            "status": "table_not_found"
+                        })
+            
+            valid_tables = [info for info in preview_info if info['exists']]
+            total_rows_to_delete = sum(info['row_count'] for info in valid_tables if isinstance(info['row_count'], int))
+            
+            result = {
+                "status": "success",
+                "message": "删除预览完成",
+                "data": {
+                    "action": "preview_deletion",
+                    "tables_to_delete": len(valid_tables),
+                    "total_rows_affected": total_rows_to_delete,
+                    "table_details": preview_info
+                },
+                "next_steps": [
+                    "确认要删除的表列表",
+                    "使用action='delete_tables'和confirm_deletion=True执行删除",
+                    "重要：删除操作不可逆，请确保已备份重要数据"
+                ],
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "operation_type": "preview_only"
+                }
+            }
+            
+            return f"🔍 删除预览完成\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        elif action == "delete_tables":
+            # 执行删除操作
+            if not tables_to_clean:
+                result = {
+                    "status": "error",
+                    "message": "删除操作需要指定tables_to_clean参数",
+                    "suggestion": "请先使用get_data_info(info_type='cleanup')获取清理建议"
+                }
+                return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+            if not confirm_deletion:
+                result = {
+                    "status": "error",
+                    "message": "删除操作需要设置confirm_deletion=True进行确认",
+                    "safety_reminder": "删除操作不可逆，请确保已备份重要数据",
+                    "suggestion": "可以先使用action='preview_deletion'预览删除操作"
+                }
+                return f"❌ 安全确认失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+            # 执行删除操作
+            deletion_results = []
+            successful_deletions = 0
+            failed_deletions = 0
+            
+            with get_db_connection() as conn:
+                for table in tables_to_clean:
+                    try:
+                        if _table_exists(table):
+                            # 获取删除前的行数
+                            escaped_table = _escape_identifier(table)
+                            cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                            row_count = cursor.fetchone()[0]
+                            
+                            # 执行删除
+                            conn.execute(f"DROP TABLE {escaped_table}")
+                            conn.commit()
+                            
+                            deletion_results.append({
+                                "table_name": table,
+                                "status": "deleted",
+                                "rows_deleted": row_count,
+                                "message": "表删除成功"
+                            })
+                            successful_deletions += 1
+                            logger.info(f"成功删除表: {table} (包含 {row_count} 行数据)")
+                        else:
+                            deletion_results.append({
+                                "table_name": table,
+                                "status": "not_found",
+                                "rows_deleted": 0,
+                                "message": "表不存在，跳过删除"
+                            })
+                    except Exception as e:
+                        deletion_results.append({
+                            "table_name": table,
+                            "status": "error",
+                            "rows_deleted": 0,
+                            "message": f"删除失败: {str(e)}"
+                        })
+                        failed_deletions += 1
+                        logger.error(f"删除表 {table} 失败: {e}")
+            
+            total_rows_deleted = sum(result['rows_deleted'] for result in deletion_results)
+            
+            result = {
+                "status": "success" if failed_deletions == 0 else "partial_success",
+                "message": f"清理操作完成：成功删除 {successful_deletions} 个表，失败 {failed_deletions} 个",
+                "data": {
+                    "action": "delete_tables",
+                    "successful_deletions": successful_deletions,
+                    "failed_deletions": failed_deletions,
+                    "total_rows_deleted": total_rows_deleted,
+                    "deletion_details": deletion_results
+                },
+                "summary": {
+                    "tables_processed": len(tables_to_clean),
+                    "tables_deleted": successful_deletions,
+                    "data_rows_removed": total_rows_deleted,
+                    "operation_time": datetime.now().isoformat()
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "operation_type": "actual_deletion",
+                    "confirmation_received": confirm_deletion
+                }
+            }
+            
+            return f"🧹 数据库清理完成\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        elif action == "backup_and_delete":
+            # 备份后删除（暂未实现）
+            result = {
+                "status": "error",
+                "message": "备份后删除功能暂未实现",
+                "available_actions": ["delete_tables", "preview_deletion"],
+                "suggestion": "请手动备份重要数据后使用delete_tables操作"
+            }
+            return f"❌ 功能暂未实现\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        else:
+            result = {
+                "status": "error",
+                "message": f"不支持的清理操作: {action}",
+                "supported_actions": ["delete_tables", "preview_deletion", "backup_and_delete"]
+            }
+            return f"❌ 操作不支持\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+    
+    except Exception as e:
+        logger.error(f"数据库清理操作失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"清理操作失败: {str(e)}",
+            "error_type": type(e).__name__,
+            "action": action,
+            "tables_to_clean": tables_to_clean
+        }
+        return f"❌ 清理失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 
 

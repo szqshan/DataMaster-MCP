@@ -1,6 +1,6 @@
-# SuperDataAnalysis MCP
+# 📊 SuperDataAnalysis MCP
 
-超级数据分析MCP工具 - 为AI提供强大的数据分析能力
+> **超级数据分析MCP工具** - 为AI提供强大的数据分析能力
 
 ## 🎯 核心理念
 
@@ -8,110 +8,79 @@
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
+### 启动服务
 
 ```bash
 python main.py
 ```
 
-### 3. 核心功能
-
-#### 📊 导入Excel数据
+### 基本使用
 
 ```python
+# 导入Excel数据
 connect_data_source(
     source_type="excel",
-    config={
-        "file_path": "data/sales.xlsx",
-        "sheet_name": "Sheet1"
-    },
-    target_table="sales_data"
+    config={"file_path": "data.xlsx"},
+    target_table="my_data"
 )
+
+# 执行SQL查询
+execute_sql("SELECT * FROM my_data LIMIT 10")
+
+# 数据分析
+analyze_data(analysis_type="basic_stats", table_name="my_data")
+
+# 导出结果
+export_data(export_type="excel", data_source="my_data")
 ```
 
-#### 🔍 执行SQL查询
+## ✨ 核心功能
 
-```python
-execute_sql(
-    query="SELECT * FROM sales_data WHERE amount > 1000",
-    limit=100
-)
-```
+### 📁 数据导入导出
+- **Excel/CSV文件导入** - 支持多种格式和编码
+- **数据库连接** - MySQL、PostgreSQL、MongoDB、SQLite
+- **API数据获取** - RESTful API连接和数据提取
+- **多格式导出** - Excel、CSV、JSON格式导出
 
-#### 📋 获取数据信息
+### 🔍 数据查询分析
+- **SQL查询执行** - 本地和外部数据库查询
+- **数据统计分析** - 基础统计、相关性、异常值检测
+- **数据质量检查** - 缺失值、重复值分析
 
-```python
-# 获取所有表
-get_data_info(info_type="tables")
+### 🛠️ 数据处理
+- **数据清洗** - 去重、填充缺失值
+- **数据转换** - 类型转换、格式化
+- **数据聚合** - 分组统计、汇总
 
-# 获取表结构
-get_data_info(info_type="schema", table_name="sales_data")
+## 📚 文档
 
-# 获取表统计
-get_data_info(info_type="stats", table_name="sales_data")
-```
-
-## 🔧 当前功能
-
-- ✅ Excel文件导入
-- ✅ CSV文件导入
-- ✅ SQL查询执行
-- ✅ 数据信息获取
-- ✅ 安全SQL检查
-- ✅ 自动数据库管理
-
-## 📁 项目结构
-
-```
-SuperDataAnalysis_MCP/
-├── main.py                    # 主MCP服务器
-├── requirements.txt           # 依赖包
-├── README.md                  # 项目说明
-├── data/                      # 数据存储目录
-│   └── analysis.db           # SQLite数据库
-└── exports/                   # 导出文件目录
-```
+- **[用户使用手册](用户使用手册.md)** - 完整的功能使用指南
+- **[开发者文档](开发者文档.md)** - 技术文档和AI使用指南
+- **[项目结构说明](项目结构说明.md)** - 目录结构和文件说明
+- **[更新日志](CHANGELOG.md)** - 版本更新记录
+- **[版本信息](VERSION.md)** - 当前版本详情
 
 ## 🛡️ 安全特性
 
 - SQL注入防护
-- 危险操作拦截（DROP、DELETE等）
+- 危险操作拦截
 - 查询结果限制
 - 参数验证
-
-## 📝 返回格式
-
-所有工具返回统一的JSON格式：
-
-```json
-{
-  "status": "success|error|info",
-  "message": "操作描述",
-  "data": {
-    // 具体数据
-  },
-  "metadata": {
-    "timestamp": "2024-01-01T12:00:00",
-    // 其他元数据
-  }
-}
-```
-
-## 🔄 开发计划
-
-- [ ] 数据分析工具（统计、相关性、异常值检测）
-- [ ] 图表生成工具
-- [ ] 数据导出工具
-- [ ] MySQL/MongoDB支持
-- [ ] API数据获取
-- [ ] 批量文件处理
+- 环境变量管理敏感信息
 
 ## 📞 支持
 
-如有问题或建议，请提交Issue或联系开发团队。
+- 📖 查看[用户使用手册](用户使用手册.md)获取详细使用说明
+- 🛠️ 查看[开发者文档](开发者文档.md)了解技术细节
+- 📁 查看[项目结构说明](项目结构说明.md)了解文件组织
+- 🐛 提交Issue报告问题或建议
+
+---
+
+**版本**: v1.0.0 | **状态**: ✅ 稳定版 | **更新**: 2025-01-24

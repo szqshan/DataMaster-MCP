@@ -106,10 +106,46 @@ class ConfigManager:
                 "enabled": config.get("enabled", True),
                 "host": config.get("host", ""),
                 "database": config.get("database", ""),
-                "file_path": config.get("file_path", "")
+                "file_path": config.get("file_path", ""),
+                "is_temporary": config.get("_is_temporary", False),
+                "created_at": config.get("_created_at")
             }
         
         return result
+    
+    def cleanup_temporary_configs(self) -> tuple[bool, str]:
+        """清理所有临时配置"""
+        try:
+            temp_configs = []
+            for name, config in self.config_data.get("databases", {}).items():
+                if config.get("_is_temporary", False):
+                    temp_configs.append(name)
+            
+            if not temp_configs:
+                return True, "没有找到临时配置"
+            
+            removed_count = 0
+            for config_name in temp_configs:
+                if self.remove_database_config(config_name):
+                    removed_count += 1
+            
+            return True, f"成功清理 {removed_count} 个临时配置: {', '.join(temp_configs)}"
+        except Exception as e:
+            return False, f"清理临时配置失败: {str(e)}"
+    
+    def get_temporary_configs(self) -> Dict[str, Dict[str, Any]]:
+        """获取所有临时配置"""
+        temp_configs = {}
+        for name, config in self.config_data.get("databases", {}).items():
+            if config.get("_is_temporary", False) and config.get("enabled", True):
+                temp_configs[name] = {
+                    "type": config.get("type"),
+                    "host": config.get("host"),
+                    "database": config.get("database"),
+                    "description": config.get("description", ""),
+                    "created_at": config.get("_created_at")
+                }
+        return temp_configs
     
     def get_default_limits(self) -> Dict[str, Any]:
         """获取默认限制配置"""
@@ -141,9 +177,15 @@ class ConfigManager:
         
         # 根据数据库类型验证必需字段
         if db_type == "mysql":
-            required_fields = ["host", "database", "username", "password"]
+            required_fields = ["host", "database", "password"]
+            # 检查用户名字段（支持 username 或 user）
+            if not (config.get("username") or config.get("user")):
+                return False, "缺少必需的配置字段: username (或 user)"
         elif db_type == "postgresql":
-            required_fields = ["host", "database", "username", "password"]
+            required_fields = ["host", "database", "password"]
+            # 检查用户名字段（支持 username 或 user）
+            if not (config.get("username") or config.get("user")):
+                return False, "缺少必需的配置字段: username (或 user)"
         elif db_type == "mongodb":
             required_fields = ["host", "database"]
         elif db_type == "sqlite":
