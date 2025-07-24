@@ -1559,24 +1559,38 @@ def _check_missing_values(table_name: str, columns: list, options: dict) -> dict
     except Exception as e:
         return {"error": f"缺失值检查失败: {str(e)}"}
 
+def _escape_identifier(identifier: str) -> str:
+    """转义SQL标识符（表名、列名），处理特殊字符"""
+    # 移除可能的引号
+    identifier = identifier.strip('"').strip("'")
+    # 用双引号包围以处理特殊字符
+    return f'"{identifier}"'
+
 def _check_duplicates(table_name: str, columns: list, options: dict) -> dict:
     """检查重复值"""
     try:
         with get_db_connection() as conn:
+            # 转义表名
+            escaped_table = _escape_identifier(table_name)
+            
             if columns:
-                columns_str = ", ".join(columns)
+                # 转义列名
+                escaped_columns = [_escape_identifier(col) for col in columns]
+                columns_str = ", ".join(escaped_columns)
                 group_by_str = columns_str
             else:
                 # 检查所有列的重复
-                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
                 all_columns = [col[1] for col in cursor.fetchall()]
-                columns_str = ", ".join(all_columns)
+                # 转义所有列名
+                escaped_columns = [_escape_identifier(col) for col in all_columns]
+                columns_str = ", ".join(escaped_columns)
                 group_by_str = columns_str
             
             # 查找重复记录
             cursor = conn.execute(f"""
                 SELECT {columns_str}, COUNT(*) as duplicate_count
-                FROM {table_name}
+                FROM {escaped_table}
                 GROUP BY {group_by_str}
                 HAVING COUNT(*) > 1
                 ORDER BY duplicate_count DESC
@@ -1590,7 +1604,7 @@ def _check_duplicates(table_name: str, columns: list, options: dict) -> dict:
                 SELECT SUM(cnt - 1) as total_duplicates
                 FROM (
                     SELECT COUNT(*) as cnt
-                    FROM {table_name}
+                    FROM {escaped_table}
                     GROUP BY {group_by_str}
                     HAVING COUNT(*) > 1
                 )
@@ -1599,7 +1613,7 @@ def _check_duplicates(table_name: str, columns: list, options: dict) -> dict:
             total_duplicates = cursor.fetchone()[0] or 0
             
             # 获取总行数
-            cursor = conn.execute(f"SELECT COUNT(*) FROM {table_name}")
+            cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
             total_rows = cursor.fetchone()[0]
             
             return {
@@ -2088,12 +2102,16 @@ def _process_clean(data_source: str, config: dict, target_table: str = None) -> 
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    _ensure_metadata_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "original_rows": original_count,
@@ -2206,12 +2224,16 @@ def _process_transform(data_source: str, config: dict, target_table: str = None)
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    _ensure_metadata_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "processed_rows": len(df),
@@ -2321,12 +2343,16 @@ def _process_filter(data_source: str, config: dict, target_table: str = None) ->
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    _ensure_metadata_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "original_rows": original_count,
@@ -2338,10 +2364,30 @@ def _process_filter(data_source: str, config: dict, target_table: str = None) ->
     except Exception as e:
         raise Exception(f"数据筛选失败: {str(e)}")
 
+def _ensure_metadata_table(conn) -> None:
+    """确保data_metadata表存在"""
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS data_metadata (
+                table_name TEXT PRIMARY KEY,
+                source_type TEXT,
+                source_path TEXT,
+                created_at TIMESTAMP,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                metadata TEXT
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"创建metadata表失败: {e}")
+
 def _process_aggregate(data_source: str, config: dict, target_table: str = None) -> dict:
     """数据聚合处理器"""
     try:
         with get_db_connection() as conn:
+            # 确保metadata表存在
+            _ensure_metadata_table(conn)
+            
             # 获取数据
             if data_source.upper().startswith('SELECT'):
                 df = pd.read_sql(data_source, conn)
@@ -2409,12 +2455,15 @@ def _process_aggregate(data_source: str, config: dict, target_table: str = None)
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "processed_rows": len(df),
@@ -2489,12 +2538,16 @@ def _process_merge(data_source: str, config: dict, target_table: str = None) -> 
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    _ensure_metadata_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "processed_rows": len(df),
@@ -2562,12 +2615,16 @@ def _process_reshape(data_source: str, config: dict, target_table: str = None) -
                     'created_at': datetime.now().isoformat()
                 }
                 
-                conn.execute("""
-                    INSERT OR REPLACE INTO data_metadata 
-                    (table_name, source_type, source_path, created_at, metadata)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
-                conn.commit()
+                try:
+                    _ensure_metadata_table(conn)
+                    conn.execute("""
+                        INSERT OR REPLACE INTO data_metadata 
+                        (table_name, source_type, source_path, created_at, metadata)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (table_name, 'processed_data', data_source, datetime.now().isoformat(), json.dumps(metadata)))
+                    conn.commit()
+                except Exception as metadata_error:
+                    logger.warning(f"保存元数据失败: {metadata_error}")
             
             return {
                 "processed_rows": len(df),
