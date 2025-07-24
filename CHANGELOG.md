@@ -2,6 +2,46 @@
 
 本文档记录了SuperDataAnalysis_MCP的所有重要更改。
 
+## [1.0.1] - 2025-01-24
+
+### 🐛 Bug修复
+
+#### Excel导出功能修复
+- **修复自动生成文件路径的扩展名错误**
+  - 解决了当不指定`file_path`参数时，Excel导出失败的问题
+  - 错误信息：`Invalid extension for engine 'excel': 'excel'`
+  - 根本原因：自动生成的文件路径使用了错误的扩展名（`.excel`而非`.xlsx`）
+
+- **添加文件扩展名映射表**
+  - 在`export_data`函数中添加`extension_map`字典
+  - 映射关系：`{"excel": "xlsx", "csv": "csv", "json": "json"}`
+  - 确保所有导出格式使用正确的文件扩展名
+
+- **优化文件路径生成逻辑**
+  - 修复前：`f"exports/{source_name}_{timestamp}.{export_type}"`
+  - 修复后：`f"exports/{source_name}_{timestamp}.{extension}"`
+  - 其中`extension = extension_map.get(export_type, export_type)`
+
+### 🔧 技术改进
+
+- **保持向后兼容性**：指定路径的导出功能不受影响
+- **增强错误处理**：改进了导出失败时的错误信息提示
+- **代码可维护性**：使用映射表方式便于后续扩展新的导出格式
+
+### ✅ 验证测试
+
+- ✅ 自动生成路径Excel导出：`exports/test_employees_*.xlsx`
+- ✅ 指定路径Excel导出：`final_test.xlsx` (5449 bytes)
+- ✅ CSV导出功能：`final_test.csv` (308 bytes)
+- ✅ 文件完整性：所有导出文件包含完整的8条记录
+- ✅ 多次导出测试：连续导出功能正常
+
+### 📁 影响文件
+
+- `main.py`: 修复`export_data`函数的文件路径生成逻辑
+
+---
+
 ## [1.0.0] - 2025-01-24
 
 ### 🎉 首次正式发布

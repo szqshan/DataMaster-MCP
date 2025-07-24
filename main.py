@@ -841,14 +841,95 @@ def _import_to_external_database(df, target_table: str, target_database: str, so
 
 def _connect_sqlite(config: dict, target_table: str = None) -> str:
     """连接SQLite数据库"""
-    # 这里可以实现SQLite数据库连接逻辑
-    # 暂时返回提示信息
-    result = {
-        "status": "info",
-        "message": "SQLite连接功能待实现",
-        "config": config
-    }
-    return f"ℹ️ 功能开发中\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+    try:
+        file_path = config.get("file_path")
+        if not file_path:
+            result = {
+                "status": "error",
+                "message": "缺少file_path参数",
+                "required_params": ["file_path"]
+            }
+            return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 检查文件是否存在
+        sqlite_path = Path(file_path)
+        if not sqlite_path.exists():
+            result = {
+                "status": "error",
+                "message": f"SQLite文件不存在: {file_path}",
+                "file_path": file_path
+            }
+            return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 创建临时配置
+        temp_config_name = f"temp_sqlite_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        sqlite_config = {
+            "type": "sqlite",
+            "file_path": str(sqlite_path.absolute()),
+            "enabled": True,
+            "description": f"临时SQLite连接: {sqlite_path.name}",
+            "_is_temporary": True,
+            "_created_at": datetime.now().isoformat()
+        }
+        
+        # 添加临时配置
+        if config_manager.add_database_config(temp_config_name, sqlite_config):
+            try:
+                # 测试连接
+                is_valid, message = database_manager.test_connection(temp_config_name)
+                if not is_valid:
+                    config_manager.remove_database_config(temp_config_name)
+                    result = {
+                        "status": "error",
+                        "message": f"SQLite连接测试失败: {message}",
+                        "file_path": file_path
+                    }
+                    return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+                # 获取表列表
+                tables = database_manager.get_table_list(temp_config_name)
+                
+                result = {
+                    "status": "success",
+                    "message": f"SQLite数据库连接成功: {sqlite_path.name}",
+                    "data": {
+                        "database_type": "sqlite",
+                        "file_path": str(sqlite_path.absolute()),
+                        "file_name": sqlite_path.name,
+                        "file_size": f"{sqlite_path.stat().st_size / 1024:.2f} KB",
+                        "tables": tables,
+                        "table_count": len(tables),
+                        "temp_config_name": temp_config_name,
+                        "connection_type": "外部SQLite数据库连接",
+                        "data_location": str(sqlite_path.absolute()),
+                        "usage_note": f"使用execute_sql(data_source='{temp_config_name}')或query_external_database(database_name='{temp_config_name}')查询此数据库"
+                    },
+                    "metadata": {
+                        "timestamp": datetime.now().isoformat(),
+                        "connection_method": "sqlite_file"
+                    }
+                }
+                
+                return f"✅ SQLite数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+            except Exception as e:
+                config_manager.remove_database_config(temp_config_name)
+                raise e
+        else:
+            result = {
+                "status": "error",
+                "message": "创建SQLite临时配置失败"
+            }
+            return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+    except Exception as e:
+        logger.error(f"SQLite数据库连接失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"SQLite数据库连接失败: {str(e)}",
+            "error_type": type(e).__name__
+        }
+        return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 def _connect_external_database(db_type: str, config: dict, target_table: str = None) -> str:
     """连接外部数据库（MySQL、PostgreSQL、MongoDB）"""
@@ -1550,75 +1631,153 @@ def _table_exists(table_name: str) -> bool:
         return False
 
 def _calculate_basic_stats(table_name: str, columns: list, options: dict) -> dict:
-    """计算基础统计信息"""
+    """计算基础统计信息 - 智能处理数值和文本列"""
     try:
         escaped_table = _escape_identifier(table_name)
         
         with get_db_connection() as conn:
+            # 获取列信息
             if columns:
-                # 只分析指定列
-                numeric_columns = []
-                for col in columns:
-                    # 检查列是否为数值类型
-                    escaped_col = _escape_identifier(col)
-                    cursor = conn.execute(f"SELECT typeof({escaped_col}) FROM {escaped_table} LIMIT 1")
-                    col_type = cursor.fetchone()[0]
-                    if col_type in ['integer', 'real']:
-                        numeric_columns.append(col)
-                
-                if not numeric_columns:
-                    return {"error": "没有找到数值类型的列"}
+                target_columns = columns
             else:
-                # 自动检测数值列
                 cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
-                all_columns = cursor.fetchall()
-                numeric_columns = [col[1] for col in all_columns if col[2] in ['INTEGER', 'REAL', 'NUMERIC']]
-                
-                if not numeric_columns:
-                    return {"error": "表中没有数值类型的列"}
+                target_columns = [col[1] for col in cursor.fetchall()]
             
-            # 计算统计信息
+            if not target_columns:
+                return {"error": "没有找到可分析的列"}
+            
+            # 分析每一列
             stats_result = {}
-            for col in numeric_columns:
+            numeric_columns = []
+            text_columns = []
+            
+            for col in target_columns:
                 escaped_col = _escape_identifier(col)
+                
+                # 检测列类型
+                cursor = conn.execute(f"SELECT typeof({escaped_col}) FROM {escaped_table} WHERE {escaped_col} IS NOT NULL LIMIT 1")
+                result = cursor.fetchone()
+                col_type = result[0] if result else 'null'
+                
+                # 获取基本信息
                 cursor = conn.execute(f"""
                     SELECT 
-                        COUNT({escaped_col}) as count,
-                        AVG({escaped_col}) as mean,
-                        MIN({escaped_col}) as min_val,
-                        MAX({escaped_col}) as max_val,
+                        COUNT(*) as total_count,
+                        COUNT({escaped_col}) as non_null_count,
                         COUNT(CASE WHEN {escaped_col} IS NULL THEN 1 END) as null_count
                     FROM {escaped_table}
                 """)
+                basic_info = cursor.fetchone()
                 
-                row = cursor.fetchone()
-                
-                # 计算中位数和标准差
-                cursor = conn.execute(f"SELECT {escaped_col} FROM {escaped_table} WHERE {escaped_col} IS NOT NULL ORDER BY {escaped_col}")
-                values = [row[0] for row in cursor.fetchall()]
-                
-                if values:
-                    median = np.median(values)
-                    std_dev = np.std(values)
-                    q25 = np.percentile(values, 25)
-                    q75 = np.percentile(values, 75)
+                if col_type in ['integer', 'real']:
+                    # 数值列统计
+                    numeric_columns.append(col)
+                    cursor = conn.execute(f"""
+                        SELECT 
+                            AVG({escaped_col}) as mean,
+                            MIN({escaped_col}) as min_val,
+                            MAX({escaped_col}) as max_val
+                        FROM {escaped_table}
+                        WHERE {escaped_col} IS NOT NULL
+                    """)
+                    numeric_stats = cursor.fetchone()
+                    
+                    # 计算中位数和标准差
+                    cursor = conn.execute(f"SELECT {escaped_col} FROM {escaped_table} WHERE {escaped_col} IS NOT NULL ORDER BY {escaped_col}")
+                    values = [row[0] for row in cursor.fetchall()]
+                    
+                    if values:
+                        median = np.median(values)
+                        std_dev = np.std(values)
+                        q25 = np.percentile(values, 25)
+                        q75 = np.percentile(values, 75)
+                    else:
+                        median = std_dev = q25 = q75 = None
+                    
+                    stats_result[col] = {
+                        "column_type": "numeric",
+                        "data_type": col_type,
+                        "total_count": basic_info[0],
+                        "non_null_count": basic_info[1],
+                        "null_count": basic_info[2],
+                        "null_percentage": round((basic_info[2] / basic_info[0]) * 100, 2) if basic_info[0] > 0 else 0,
+                        "mean": round(numeric_stats[0], 4) if numeric_stats[0] else None,
+                        "median": round(median, 4) if median is not None else None,
+                        "std_dev": round(std_dev, 4) if std_dev is not None else None,
+                        "min": numeric_stats[1],
+                        "max": numeric_stats[2],
+                        "q25": round(q25, 4) if q25 is not None else None,
+                        "q75": round(q75, 4) if q75 is not None else None
+                    }
+                    
                 else:
-                    median = std_dev = q25 = q75 = None
-                
-                stats_result[col] = {
-                    "count": row[0],
-                    "mean": round(row[1], 4) if row[1] else None,
-                    "median": round(median, 4) if median else None,
-                    "std_dev": round(std_dev, 4) if std_dev else None,
-                    "min": row[2],
-                    "max": row[3],
-                    "q25": round(q25, 4) if q25 else None,
-                    "q75": round(q75, 4) if q75 else None,
-                    "null_count": row[4],
-                    "null_percentage": round((row[4] / row[0]) * 100, 2) if row[0] > 0 else 0
-                }
+                    # 文本列统计
+                    text_columns.append(col)
+                    
+                    # 获取唯一值数量
+                    cursor = conn.execute(f"SELECT COUNT(DISTINCT {escaped_col}) FROM {escaped_table} WHERE {escaped_col} IS NOT NULL")
+                    unique_count = cursor.fetchone()[0]
+                    
+                    # 获取最常见的值（前5个）
+                    cursor = conn.execute(f"""
+                        SELECT {escaped_col}, COUNT(*) as freq 
+                        FROM {escaped_table} 
+                        WHERE {escaped_col} IS NOT NULL 
+                        GROUP BY {escaped_col} 
+                        ORDER BY freq DESC 
+                        LIMIT 5
+                    """)
+                    top_values = cursor.fetchall()
+                    
+                    # 计算字符串长度统计（如果是文本）
+                    length_stats = None
+                    if col_type == 'text':
+                        cursor = conn.execute(f"""
+                            SELECT 
+                                AVG(LENGTH({escaped_col})) as avg_length,
+                                MIN(LENGTH({escaped_col})) as min_length,
+                                MAX(LENGTH({escaped_col})) as max_length
+                            FROM {escaped_table}
+                            WHERE {escaped_col} IS NOT NULL
+                        """)
+                        length_result = cursor.fetchone()
+                        if length_result[0] is not None:
+                            length_stats = {
+                                "avg_length": round(length_result[0], 2),
+                                "min_length": length_result[1],
+                                "max_length": length_result[2]
+                            }
+                    
+                    stats_result[col] = {
+                        "column_type": "categorical",
+                        "data_type": col_type,
+                        "total_count": basic_info[0],
+                        "non_null_count": basic_info[1],
+                        "null_count": basic_info[2],
+                        "null_percentage": round((basic_info[2] / basic_info[0]) * 100, 2) if basic_info[0] > 0 else 0,
+                        "unique_count": unique_count,
+                        "unique_percentage": round((unique_count / basic_info[1]) * 100, 2) if basic_info[1] > 0 else 0,
+                        "top_values": [{
+                            "value": str(val[0]),
+                            "frequency": val[1],
+                            "percentage": round((val[1] / basic_info[1]) * 100, 2) if basic_info[1] > 0 else 0
+                        } for val in top_values],
+                        "length_stats": length_stats
+                    }
             
-            return stats_result
+            # 添加汇总信息
+            summary = {
+                "total_columns": len(target_columns),
+                "numeric_columns": len(numeric_columns),
+                "categorical_columns": len(text_columns),
+                "numeric_column_names": numeric_columns,
+                "categorical_column_names": text_columns
+            }
+            
+            return {
+                "column_stats": stats_result,
+                "summary": summary
+            }
             
     except Exception as e:
         return {"error": f"计算统计信息失败: {str(e)}"}
@@ -2357,7 +2516,15 @@ def export_data(
                 source_name = "query_result"
             else:
                 source_name = data_source
-            file_path = f"exports/{source_name}_{timestamp}.{export_type}"
+            
+            # 映射导出类型到文件扩展名
+            extension_map = {
+                "excel": "xlsx",
+                "csv": "csv",
+                "json": "json"
+            }
+            extension = extension_map.get(export_type, export_type)
+            file_path = f"exports/{source_name}_{timestamp}.{extension}"
         
         # 路由到具体的导出函数
         export_map = {
@@ -4580,6 +4747,271 @@ def execute_database_cleanup(
 
 
 
+
+
+@mcp.tool()
+def import_api_data_to_main_db(
+    session_id: str,
+    target_table: str = None,
+    data_source: str = None
+) -> str:
+    """
+    📥 API数据导入工具 - 将API存储的数据导入到主数据库
+    
+    功能说明：
+    - 将API存储会话中的数据导入到主SQLite数据库
+    - 支持指定目标表名或自动生成
+    - 提供数据预览和导入统计
+    - 解决API数据分析不便的问题
+    
+    Args:
+        session_id: API存储会话ID
+        target_table: 目标表名（可选，默认使用session_id作为表名）
+        data_source: 数据源名称（可选，默认使用本地SQLite）
+    
+    Returns:
+        str: JSON格式的导入结果，包含导入统计和表信息
+    
+    🤖 AI使用建议：
+    1. 先用list_api_storage_sessions查看可用会话
+    2. 使用此工具导入API数据到主数据库
+    3. 然后可以使用常规分析工具分析数据
+    
+    💡 最佳实践：
+    - 导入前先检查会话是否存在
+    - 使用有意义的target_table名称
+    - 导入后验证数据完整性
+    """
+    try:
+        from config.api_data_storage import APIDataStorage
+        
+        # 初始化API数据存储
+        api_storage = APIDataStorage()
+        
+        # 检查会话是否存在
+        success, sessions, message = api_storage.list_storage_sessions()
+        if not success:
+            result = {
+                "status": "error",
+                "message": f"获取会话列表失败: {message}",
+                "error_details": message
+            }
+            return f"❌ 获取会话失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        session_exists = any(session['session_id'] == session_id for session in sessions)
+        
+        if not session_exists:
+            result = {
+                "status": "error",
+                "message": f"API存储会话不存在: {session_id}",
+                "available_sessions": [s['session_id'] for s in sessions]
+            }
+            return f"❌ 会话不存在\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 获取会话数据
+        success, session_data, data_message = api_storage.get_stored_data(session_id, format_type="dataframe")
+        if not success or session_data is None or len(session_data) == 0:
+            result = {
+                "status": "error",
+                "message": f"会话 {session_id} 中没有数据: {data_message}",
+                "session_id": session_id
+            }
+            return f"❌ 无数据可导入\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 确定目标表名
+        if not target_table:
+            target_table = f"api_data_{session_id.replace('-', '_')}"
+        
+        # 获取数据库连接
+        if data_source:
+            db_manager = DatabaseManager()
+            conn = db_manager.get_connection(data_source)
+        else:
+            conn = get_db_connection()
+        
+        # 数据已经是DataFrame格式
+        df = session_data
+        
+        # 导入数据到主数据库
+        df.to_sql(target_table, conn, if_exists='replace', index=False)
+        
+        # 获取导入统计
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {target_table}")
+        row_count = cursor.fetchone()[0]
+        
+        # 获取列信息
+        cursor.execute(f"PRAGMA table_info({target_table})")
+        columns_info = cursor.fetchall()
+        columns = [col[1] for col in columns_info]
+        
+        cursor.close()
+        if not data_source:
+            conn.close()
+        
+        result = {
+            "status": "success",
+            "message": f"API数据成功导入到主数据库",
+            "data": {
+                "session_id": session_id,
+                "target_table": target_table,
+                "rows_imported": row_count,
+                "columns_count": len(columns),
+                "columns": columns,
+                "data_source": data_source or "本地SQLite"
+            },
+            "next_steps": {
+                "analyze_data": f"analyze_data(analysis_type='basic_stats', table_name='{target_table}')",
+                "query_data": f"execute_sql(query='SELECT * FROM {target_table} LIMIT 10')",
+                "export_data": f"export_data(export_type='excel', data_source='{target_table}')"
+            },
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "operation_type": "api_data_import",
+                "source_type": "api_storage"
+            }
+        }
+        
+        return f"📥 API数据导入成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except ImportError as e:
+        result = {
+            "status": "error",
+            "message": "API数据存储模块导入失败",
+            "error": str(e),
+            "suggestion": "请检查config/api_data_storage.py文件是否存在"
+        }
+        return f"❌ 模块导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+    
+    except Exception as e:
+        logger.error(f"API数据导入失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"API数据导入失败: {str(e)}",
+            "error_type": type(e).__name__,
+            "session_id": session_id,
+            "target_table": target_table
+        }
+        return f"❌ 导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+
+
+@mcp.tool()
+def list_api_storage_sessions() -> str:
+    """
+    📋 API存储会话列表工具 - 查看所有API数据存储会话
+    
+    功能说明：
+    - 列出所有API数据存储会话
+    - 显示会话详细信息和数据统计
+    - 为API数据导入提供会话选择
+    
+    Returns:
+        str: JSON格式的会话列表，包含会话信息和数据统计
+    
+    🤖 AI使用建议：
+    - 在导入API数据前先查看可用会话
+    - 选择合适的会话进行数据导入
+    - 了解每个会话的数据量和结构
+    """
+    try:
+        from config.api_data_storage import APIDataStorage
+        
+        # 初始化API数据存储
+        api_storage = APIDataStorage()
+        
+        # 获取所有会话
+        success, sessions, message = api_storage.list_storage_sessions()
+        
+        if not success:
+            result = {
+                "status": "error",
+                "message": f"获取会话列表失败: {message}",
+                "error_details": message
+            }
+            return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        if not sessions:
+            result = {
+                "status": "success",
+                "message": "暂无API存储会话",
+                "data": {
+                    "sessions_count": 0,
+                    "sessions": []
+                },
+                "suggestion": "使用fetch_api_data工具创建API数据存储会话"
+            }
+            return f"📋 暂无API存储会话\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 为每个会话获取数据统计
+        sessions_with_stats = []
+        for session in sessions:
+            session_id = session['session_id']
+            try:
+                success_data, session_data, data_msg = api_storage.get_stored_data(session_id, format_type="dataframe")
+                data_count = len(session_data) if success_data and session_data is not None else 0
+                
+                # 获取数据列信息
+                columns = []
+                if success_data and session_data is not None and len(session_data) > 0:
+                    columns = list(session_data.columns) if hasattr(session_data, 'columns') else []
+                
+                session_info = {
+                    **session,
+                    "data_statistics": {
+                        "rows_count": data_count,
+                        "columns_count": len(columns),
+                        "columns": columns[:10],  # 只显示前10列
+                        "has_more_columns": len(columns) > 10
+                    }
+                }
+                sessions_with_stats.append(session_info)
+                
+            except Exception as e:
+                session_info = {
+                    **session,
+                    "data_statistics": {
+                        "error": f"获取数据统计失败: {str(e)}"
+                    }
+                }
+                sessions_with_stats.append(session_info)
+        
+        result = {
+            "status": "success",
+            "message": f"找到 {len(sessions)} 个API存储会话",
+            "data": {
+                "sessions_count": len(sessions),
+                "sessions": sessions_with_stats
+            },
+            "usage_tips": {
+                "import_data": "使用import_api_data_to_main_db导入数据到主数据库",
+                "preview_data": "会话数据已包含在data_statistics中",
+                "analyze_data": "导入后可使用analyze_data等工具分析"
+            },
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "operation_type": "list_api_sessions"
+            }
+        }
+        
+        return f"📋 API存储会话列表\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except ImportError as e:
+        result = {
+            "status": "error",
+            "message": "API数据存储模块导入失败",
+            "error": str(e),
+            "suggestion": "请检查config/api_data_storage.py文件是否存在"
+        }
+        return f"❌ 模块导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+    
+    except Exception as e:
+        logger.error(f"获取API存储会话列表失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"获取会话列表失败: {str(e)}",
+            "error_type": type(e).__name__
+        }
+        return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 
 # ================================
