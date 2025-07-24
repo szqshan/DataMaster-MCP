@@ -1427,11 +1427,99 @@ def get_data_info(
                     
                     return f"🧹 数据库清理分析完成\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                 
+                elif info_type == "api_storage":
+                    # API存储数据概览 - 解决API数据存储位置不透明问题
+                    try:
+                        from config.api_data_storage import api_data_storage
+                        
+                        # 获取所有API存储会话
+                        success, sessions, message = api_data_storage.list_storage_sessions()
+                        
+                        if not success:
+                            result = {
+                                "status": "error",
+                                "message": f"获取API存储信息失败: {message}",
+                                "data_source": "API存储"
+                            }
+                            return f"❌ API存储信息获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                        
+                        # 统计API存储信息
+                        total_sessions = len(sessions)
+                        total_records = sum(session.get('total_records', 0) for session in sessions)
+                        api_names = list(set(session['api_name'] for session in sessions))
+                        endpoint_names = list(set(session['endpoint_name'] for session in sessions))
+                        
+                        # 按API分组统计
+                        api_stats = {}
+                        for session in sessions:
+                            api_name = session['api_name']
+                            if api_name not in api_stats:
+                                api_stats[api_name] = {
+                                    "sessions": 0,
+                                    "total_records": 0,
+                                    "endpoints": set()
+                                }
+                            api_stats[api_name]["sessions"] += 1
+                            api_stats[api_name]["total_records"] += session.get('total_records', 0)
+                            api_stats[api_name]["endpoints"].add(session['endpoint_name'])
+                        
+                        # 转换为可序列化的格式
+                        api_summary = []
+                        for api_name, stats in api_stats.items():
+                            api_summary.append({
+                                "api_name": api_name,
+                                "sessions": stats["sessions"],
+                                "total_records": stats["total_records"],
+                                "endpoints": list(stats["endpoints"])
+                            })
+                        
+                        result = {
+                            "status": "success",
+                            "message": f"找到 {total_sessions} 个API存储会话，共 {total_records} 条记录",
+                            "data": {
+                                "summary": {
+                                    "total_sessions": total_sessions,
+                                    "total_records": total_records,
+                                    "unique_apis": len(api_names),
+                                    "unique_endpoints": len(endpoint_names)
+                                },
+                                "api_breakdown": api_summary,
+                                "recent_sessions": sessions[:5]  # 显示最近5个会话
+                            },
+                            "storage_info": {
+                                "storage_type": "api_storage",
+                                "storage_directory": "data/api_storage",
+                                "description": "API数据存储在独立的SQLite文件中，每个会话对应一个文件"
+                            },
+                            "metadata": {
+                                "data_source": "API存储",
+                                "timestamp": datetime.now().isoformat()
+                            },
+                            "usage_tips": [
+                                "使用 query_api_storage_data() 查看所有API存储会话",
+                                "使用 query_api_storage_data(session_id='xxx') 查询特定会话数据",
+                                "API数据不在主数据库中，而是存储在独立文件中",
+                                "每个API调用会自动创建或使用现有的存储会话"
+                            ]
+                        }
+                        
+                        return f"📊 API存储信息概览\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                        
+                    except Exception as e:
+                        logger.error(f"获取API存储信息失败: {e}")
+                        result = {
+                            "status": "error",
+                            "message": f"获取API存储信息失败: {str(e)}",
+                            "error_type": type(e).__name__,
+                            "data_source": "API存储"
+                        }
+                        return f"❌ API存储信息获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
                 else:
                     result = {
                         "status": "error",
                         "message": "无效的信息类型或缺少必要参数",
-                        "supported_types": ["tables", "schema", "stats", "cleanup"],
+                        "supported_types": ["tables", "schema", "stats", "cleanup", "api_storage"],
                         "data_source": "本地SQLite"
                     }
                     return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
@@ -4070,6 +4158,171 @@ def create_api_storage_session(
 # store_api_data_to_session 函数已删除
 # 原因：与简化后的 fetch_api_data 功能重复
 # 现在所有 API 数据获取都通过 fetch_api_data 自动存储到数据库
+
+@mcp.tool()
+def query_api_storage_data(
+    session_id: str = None,
+    api_name: str = None,
+    endpoint_name: str = None,
+    limit: int = 10,
+    format_type: str = "json"
+) -> str:
+    """
+    查询API存储的数据 - 解决API数据存储位置不透明的问题
+    
+    功能说明：
+    - 查询存储在独立文件中的API数据
+    - 支持按会话ID、API名称、端点名称筛选
+    - 提供多种数据格式输出
+    - 显示数据存储位置和会话信息
+    
+    Args:
+        session_id: 存储会话ID（精确查询）
+        api_name: API名称（模糊筛选）
+        endpoint_name: 端点名称（模糊筛选）
+        limit: 返回记录数限制（默认10条）
+        format_type: 数据格式（json/dataframe/summary）
+    
+    Returns:
+        str: JSON格式的查询结果，包含数据和存储位置信息
+    
+    🎯 解决问题：
+    - ✅ API数据存储位置透明化
+    - ✅ 提供API数据查询入口
+    - ✅ 显示会话与表的关联关系
+    - ✅ 支持多种查询方式
+    
+    💡 使用示例：
+    - query_api_storage_data() # 列出所有API存储会话
+    - query_api_storage_data(api_name="rest_api_example") # 查询特定API的数据
+    - query_api_storage_data(session_id="xxx") # 查询特定会话的数据
+    """
+    try:
+        from config.api_data_storage import api_data_storage
+        
+        # 如果提供了session_id，直接查询该会话的数据
+        if session_id:
+            success, data, message = api_data_storage.get_stored_data(
+                session_id=session_id,
+                limit=limit,
+                format_type=format_type
+            )
+            
+            if success:
+                # 获取会话信息
+                session_success, sessions, _ = api_data_storage.list_storage_sessions()
+                session_info = None
+                if session_success:
+                    session_info = next((s for s in sessions if s['session_id'] == session_id), None)
+                
+                result = {
+                    "status": "success",
+                    "message": f"查询到 {len(data) if isinstance(data, list) else 1} 条API数据记录",
+                    "data": {
+                        "session_info": session_info,
+                        "records": data[:limit] if isinstance(data, list) else data,
+                        "total_shown": min(len(data) if isinstance(data, list) else 1, limit)
+                    },
+                    "storage_info": {
+                        "storage_type": "api_storage",
+                        "file_location": session_info['file_path'] if session_info else "unknown",
+                        "session_id": session_id
+                    }
+                }
+                return f"📊 API存储数据查询结果\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            else:
+                result = {
+                    "status": "error",
+                    "message": f"查询API存储数据失败: {message}",
+                    "session_id": session_id
+                }
+                return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 列出所有存储会话
+        success, sessions, message = api_data_storage.list_storage_sessions(api_name=api_name)
+        
+        if not success:
+            result = {
+                "status": "error",
+                "message": f"获取API存储会话失败: {message}"
+            }
+            return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 按endpoint_name筛选
+        if endpoint_name:
+            sessions = [s for s in sessions if endpoint_name.lower() in s['endpoint_name'].lower()]
+        
+        if not sessions:
+            result = {
+                "status": "success",
+                "message": "没有找到匹配的API存储会话",
+                "data": {
+                    "sessions": [],
+                    "total_sessions": 0
+                },
+                "filters": {
+                    "api_name": api_name,
+                    "endpoint_name": endpoint_name
+                }
+            }
+            return f"📋 API存储会话列表\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 为每个会话获取数据预览
+        session_data = []
+        for session in sessions:
+            session_info = {
+                "session_id": session['session_id'],
+                "session_name": session['session_name'],
+                "api_name": session['api_name'],
+                "endpoint_name": session['endpoint_name'],
+                "total_records": session['total_records'],
+                "created_at": session['created_at'],
+                "status": session['status']
+            }
+            
+            # 获取数据预览（前3条）
+            data_success, data, data_message = api_data_storage.get_stored_data(
+                session['session_id'], limit=3, format_type="json"
+            )
+            
+            if data_success and data:
+                session_info["data_preview"] = data[:2]  # 只显示前2条作为预览
+                session_info["preview_message"] = f"显示前2条记录，共{len(data)}条"
+            else:
+                session_info["data_preview"] = []
+                session_info["preview_message"] = data_message
+            
+            session_data.append(session_info)
+        
+        result = {
+            "status": "success",
+            "message": f"找到 {len(sessions)} 个API存储会话",
+            "data": {
+                "sessions": session_data,
+                "total_sessions": len(sessions)
+            },
+            "storage_info": {
+                "storage_type": "api_storage",
+                "storage_directory": "data/api_storage",
+                "description": "API数据存储在独立的SQLite文件中，每个会话对应一个文件"
+            },
+            "usage_tips": [
+                "使用session_id参数查询特定会话的完整数据",
+                "API数据不在主数据库中，而是存储在独立文件中",
+                "每个API调用会自动创建或使用现有的存储会话"
+            ]
+        }
+        
+        return f"📋 API存储会话列表\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except Exception as e:
+        logger.error(f"查询API存储数据失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"查询API存储数据失败: {str(e)}",
+            "error_type": type(e).__name__
+        }
+        return f"❌ 查询失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 @mcp.tool()
 def execute_database_cleanup(
