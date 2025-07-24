@@ -626,6 +626,10 @@ def _import_json(config: dict, target_table: str = None, target_database: str = 
         # 清理列名（移除特殊字符）
         df.columns = [str(col).replace(' ', '_').replace('-', '_').replace('.', '_').replace('[', '_').replace(']', '_') for col in df.columns]
         
+        # 🔧 关键修复：处理复杂数据类型，确保SQLite兼容性
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False, default=str) if isinstance(x, (list, dict)) else x)
+        
         # 生成表名
         if not target_table:
             file_name = Path(file_path).stem

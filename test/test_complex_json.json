@@ -1,0 +1,45 @@
+[
+  {
+    "id": 1,
+    "title": "测试新闻1",
+    "content": "这是一条测试新闻的内容",
+    "tags": ["科技", "AI", "数据分析"],
+    "metadata": {
+      "author": "张三",
+      "publish_date": "2025-01-24",
+      "category": "技术"
+    },
+    "scores": [0.8, 0.9, 0.7],
+    "is_featured": true
+  },
+  {
+    "id": 2,
+    "title": "测试新闻2",
+    "content": "这是另一条测试新闻",
+    "tags": ["商业", "市场"],
+    "metadata": {
+      "author": "李四",
+      "publish_date": "2025-01-23",
+      "category": "商业"
+    },
+    "scores": [0.6, 0.8],
+    "is_featured": false
+  },
+  {
+    "id": 3,
+    "title": "测试新闻3",
+    "content": "第三条测试新闻",
+    "tags": ["教育", "学习", "在线课程", "技能提升"],
+    "metadata": {
+      "author": "王五",
+      "publish_date": "2025-01-22",
+      "category": "教育",
+      "subcategory": {
+        "type": "在线教育",
+        "level": "初级"
+      }
+    },
+    "scores": [0.9, 0.85, 0.92, 0.88],
+    "is_featured": true
+  }
+]
