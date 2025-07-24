@@ -19,6 +19,14 @@ from mcp.server.fastmcp import FastMCP
 import numpy as np
 from scipy import stats
 
+# SQLAlchemy imports for pandas to_sql compatibility
+try:
+    from sqlalchemy import create_engine
+    SQLALCHEMY_AVAILABLE = True
+except ImportError:
+    SQLALCHEMY_AVAILABLE = False
+    logger.warning("SQLAlchemy not available. External database import may not work properly.")
+
 # 导入数据库管理器
 from config.database_manager import database_manager
 from config.config_manager import config_manager
@@ -170,24 +178,30 @@ def _table_exists(table_name: str) -> bool:
 def connect_data_source(
     source_type: str,
     config: dict,
-    target_table: str = None
+    target_table: str = None,
+    target_database: str = None
 ) -> str:
     """
     数据源连接路由器
+    
+    重要说明：
+    - excel/csv/sqlite: 可以导入到本地SQLite或指定的外部数据库
+    - mysql/postgresql/mongodb/database_config: 建立外部数据库连接，不导入数据
     
     Args:
         source_type: 数据源类型 (excel|csv|sqlite|mysql|postgresql|mongodb|database_config)
         config: 连接配置参数或数据库配置名称
         target_table: 目标表名（可选）
+        target_database: 目标数据库名称（可选，用于将文件导入到外部数据库）
     
     Returns:
         str: 连接结果和导入状态
     """
     try:
         if source_type == "excel":
-            return _import_excel(config, target_table)
+            return _import_excel(config, target_table, target_database)
         elif source_type == "csv":
-            return _import_csv(config, target_table)
+            return _import_csv(config, target_table, target_database)
         elif source_type == "sqlite":
             return _connect_sqlite(config, target_table)
         elif source_type == "mysql":
@@ -215,8 +229,8 @@ def connect_data_source(
         }
         return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
-def _import_excel(config: dict, target_table: str = None) -> str:
-    """导入Excel文件"""
+def _import_excel(config: dict, target_table: str = None, target_database: str = None) -> str:
+    """导入Excel文件到本地SQLite或外部数据库"""
     try:
         # 获取配置参数
         file_path = config.get('file_path')
@@ -240,48 +254,56 @@ def _import_excel(config: dict, target_table: str = None) -> str:
         df.columns = [col.replace(' ', '_').replace('-', '_').replace('.', '_') for col in df.columns]
         
         # 导入到数据库
-        with get_db_connection() as conn:
-            df.to_sql(target_table, conn, if_exists='replace', index=False)
+        if target_database:
+            # 导入到外部数据库
+            return _import_to_external_database(df, target_table, target_database, 'excel', file_path, sheet_name)
+        else:
+            # 导入到本地SQLite数据库
+            with get_db_connection() as conn:
+                df.to_sql(target_table, conn, if_exists='replace', index=False)
+                
+                # 更新元数据
+                conn.execute("""
+                    INSERT OR REPLACE INTO _metadata 
+                    (table_name, created_at, source_type, source_path, row_count)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    target_table,
+                    datetime.now().isoformat(),
+                    'excel',
+                    file_path,
+                    len(df)
+                ))
+                conn.commit()
             
-            # 更新元数据
-            conn.execute("""
-                INSERT OR REPLACE INTO _metadata 
-                (table_name, created_at, source_type, source_path, row_count)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                target_table,
-                datetime.now().isoformat(),
-                'excel',
-                file_path,
-                len(df)
-            ))
-            conn.commit()
-        
-        result = {
-            "status": "success",
-            "message": "Excel文件导入成功",
-            "data": {
-                "table_name": target_table,
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-                "file_path": file_path,
-                "sheet_name": sheet_name
-            },
-            "metadata": {
-                "timestamp": datetime.now().isoformat(),
-                "source_type": "excel"
+            result = {
+                "status": "success",
+                "message": "Excel文件已导入到本地SQLite数据库",
+                "data": {
+                    "table_name": target_table,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                    "file_path": file_path,
+                    "sheet_name": sheet_name,
+                    "connection_type": "本地数据导入",
+                    "data_location": f"本地SQLite数据库 ({DB_PATH})",
+                    "usage_note": f"使用execute_sql('SELECT * FROM \"{target_table}\"')查询此表数据"
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "source_type": "excel"
+                }
             }
-        }
         
-        return f"✅ Excel导入成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        return f"✅ Excel文件已导入到本地SQLite数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
     except Exception as e:
         logger.error(f"Excel导入失败: {e}")
         raise
 
-def _import_csv(config: dict, target_table: str = None) -> str:
-    """导入CSV文件"""
+def _import_csv(config: dict, target_table: str = None, target_database: str = None) -> str:
+    """导入CSV文件到本地SQLite或外部数据库"""
     try:
         file_path = config.get('file_path')
         encoding = config.get('encoding', 'utf-8')
@@ -305,40 +327,205 @@ def _import_csv(config: dict, target_table: str = None) -> str:
         df.columns = [col.replace(' ', '_').replace('-', '_').replace('.', '_') for col in df.columns]
         
         # 导入到数据库
-        with get_db_connection() as conn:
-            df.to_sql(target_table, conn, if_exists='replace', index=False)
+        if target_database:
+            # 导入到外部数据库
+            return _import_to_external_database(df, target_table, target_database, 'csv', file_path, {'encoding': encoding, 'separator': separator})
+        else:
+            # 导入到本地SQLite数据库
+            with get_db_connection() as conn:
+                df.to_sql(target_table, conn, if_exists='replace', index=False)
+                
+                # 更新元数据
+                conn.execute("""
+                    INSERT OR REPLACE INTO _metadata 
+                    (table_name, created_at, source_type, source_path, row_count)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    target_table,
+                    datetime.now().isoformat(),
+                    'csv',
+                    file_path,
+                    len(df)
+                ))
+                conn.commit()
             
-            # 更新元数据
-            conn.execute("""
-                INSERT OR REPLACE INTO _metadata 
-                (table_name, created_at, source_type, source_path, row_count)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                target_table,
-                datetime.now().isoformat(),
-                'csv',
-                file_path,
-                len(df)
-            ))
-            conn.commit()
-        
-        result = {
-            "status": "success",
-            "message": "CSV文件导入成功",
-            "data": {
-                "table_name": target_table,
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-                "file_path": file_path
+            result = {
+                "status": "success",
+                "message": "CSV文件已导入到本地SQLite数据库",
+                "data": {
+                    "table_name": target_table,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                    "file_path": file_path,
+                    "connection_type": "本地数据导入",
+                    "data_location": f"本地SQLite数据库 ({DB_PATH})",
+                    "usage_note": f"使用execute_sql('SELECT * FROM \"{target_table}\"')查询此表数据"
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "source_type": "csv"
+                }
             }
-        }
-        
-        return f"✅ CSV导入成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+            return f"✅ CSV文件已导入到本地SQLite数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
     except Exception as e:
         logger.error(f"CSV导入失败: {e}")
         raise
+
+def _create_sqlalchemy_engine(database_name: str):
+    """为指定数据库创建SQLAlchemy引擎"""
+    try:
+        # 获取数据库配置
+        available_databases = database_manager.get_available_databases()
+        if database_name not in available_databases:
+            logger.error(f"Database config not found: {database_name}")
+            return None
+        
+        db_info = available_databases[database_name]
+        db_type = db_info.get("type", "unknown").lower()
+        
+        # 获取数据库配置详情
+        config = database_manager.config_manager.get_database_config(database_name)
+        if not config:
+            logger.error(f"Failed to get database config for: {database_name}")
+            return None
+        
+        # 根据数据库类型创建连接字符串
+        if db_type == "mysql":
+            # MySQL连接字符串
+            host = config.get("host", "localhost")
+            port = config.get("port", 3306)
+            user = config.get("user") or config.get("username")
+            password = config.get("password")
+            database = config.get("database")
+            charset = config.get("charset", "utf8mb4")
+            
+            # 使用pymysql驱动
+            connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset={charset}"
+            
+        elif db_type == "postgresql":
+            # PostgreSQL连接字符串
+            host = config.get("host", "localhost")
+            port = config.get("port", 5432)
+            user = config.get("user") or config.get("username")
+            password = config.get("password")
+            database = config.get("database")
+            
+            # 使用psycopg2驱动
+            connection_string = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
+            
+        elif db_type == "sqlite":
+            # SQLite连接字符串
+            file_path = config.get("file_path")
+            connection_string = f"sqlite:///{file_path}"
+            
+        else:
+            logger.error(f"Unsupported database type for SQLAlchemy: {db_type}")
+            return None
+        
+        # 创建引擎
+        logger.info(f"Creating SQLAlchemy engine for {database_name} with connection string: {connection_string[:50]}...")
+        engine = create_engine(connection_string, echo=False)
+        logger.info(f"SQLAlchemy engine created successfully for {database_name}")
+        return engine
+        
+    except Exception as e:
+        logger.error(f"Failed to create SQLAlchemy engine for {database_name}: {e}")
+        return None
+
+def _import_to_external_database(df, target_table: str, target_database: str, source_type: str, source_path: str, import_config: dict) -> str:
+    """将DataFrame导入到外部数据库"""
+    try:
+        # 验证目标数据库是否存在
+        available_databases = database_manager.get_available_databases()
+        if target_database not in available_databases:
+            result = {
+                "status": "error",
+                "message": f"目标数据库配置不存在: {target_database}",
+                "available_databases": list(available_databases.keys())
+            }
+            return f"❌ 导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 测试数据库连接
+        is_valid, message = database_manager.test_connection(target_database)
+        if not is_valid:
+            result = {
+                "status": "error",
+                "message": f"目标数据库连接失败: {message}",
+                "database_name": target_database
+            }
+            return f"❌ 导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 获取数据库信息
+        db_info = available_databases[target_database]
+        db_type = db_info.get("type", "unknown")
+        
+        # 使用database_manager导入数据
+        if db_type.lower() == 'mongodb':
+            # MongoDB特殊处理
+            with database_manager.get_connection(target_database) as conn:
+                records = df.to_dict('records')
+                collection = conn[target_table]
+                # 清空现有数据
+                collection.delete_many({})
+                # 插入新数据
+                if records:
+                    collection.insert_many(records)
+                row_count = len(records)
+        else:
+            # SQL数据库（MySQL, PostgreSQL, SQLite）需要SQLAlchemy引擎
+            if not SQLALCHEMY_AVAILABLE:
+                raise ImportError("SQLAlchemy is required for SQL database import. Please install: pip install sqlalchemy")
+            
+            # 创建SQLAlchemy引擎
+            logger.info(f"Starting external database import for {target_database}, table: {target_table}")
+            engine = _create_sqlalchemy_engine(target_database)
+            if engine is None:
+                raise ValueError(f"Failed to create SQLAlchemy engine for database: {target_database}")
+            
+            # 使用pandas to_sql with SQLAlchemy engine
+            logger.info(f"Importing {len(df)} rows to table {target_table} using pandas to_sql")
+            df.to_sql(target_table, engine, if_exists='replace', index=False, method='multi')
+            logger.info(f"Successfully imported data to table {target_table}")
+            row_count = len(df)
+            engine.dispose()  # 清理连接池
+        
+        # 构建成功结果
+        result = {
+            "status": "success",
+            "message": f"{source_type.upper()}文件已成功导入到外部数据库",
+            "data": {
+                "table_name": target_table,
+                "database_name": target_database,
+                "database_type": db_type,
+                "source_file": source_path,
+                "row_count": row_count,
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "connection_type": "外部数据库导入",
+                "data_location": "远程数据库服务器",
+                "usage_note": f"使用execute_sql(data_source='{target_database}')或query_external_database(database_name='{target_database}')查询此数据"
+            },
+            "import_config": import_config,
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "import_method": "external_database"
+            }
+        }
+        
+        return f"✅ {source_type.upper()}文件已导入到外部数据库 {target_database}\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except Exception as e:
+        logger.error(f"外部数据库导入失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"导入到外部数据库失败: {str(e)}",
+            "database_name": target_database,
+            "error_type": type(e).__name__
+        }
+        return f"❌ 导入失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 def _connect_sqlite(config: dict, target_table: str = None) -> str:
     """连接SQLite数据库"""
@@ -372,12 +559,15 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
             
             result = {
                 "status": "success",
-                "message": f"{db_type.upper()} 数据库连接成功",
+                "message": f"{db_type.upper()} 外部数据库连接成功（未导入数据）",
                 "data": {
                     "database_name": database_name,
                     "database_type": db_type,
                     "tables": tables,
-                    "table_count": len(tables)
+                    "table_count": len(tables),
+                    "connection_type": "外部数据库连接",
+                    "data_location": "远程数据库服务器",
+                    "usage_note": f"使用execute_sql(data_source='{database_name}')或query_external_database(database_name='{database_name}')查询此数据库"
                 },
                 "metadata": {
                     "timestamp": datetime.now().isoformat(),
@@ -385,7 +575,7 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
                 }
             }
             
-            return f"✅ {db_type.upper()} 连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            return f"✅ {db_type.upper()} 外部数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
             
         else:
             # 直接连接配置
@@ -414,14 +604,17 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
                     
                     result = {
                         "status": "success",
-                        "message": f"{db_type.upper()} 数据库连接成功",
+                        "message": f"{db_type.upper()} 外部数据库连接成功（未导入数据）",
                         "data": {
                             "database_type": db_type,
                             "host": config.get("host", "N/A"),
                             "database": config.get("database", "N/A"),
                             "tables": tables,
                             "table_count": len(tables),
-                            "temp_config_name": temp_config_name
+                            "temp_config_name": temp_config_name,
+                            "connection_type": "外部数据库连接",
+                            "data_location": "远程数据库服务器",
+                            "usage_note": f"使用execute_sql(data_source='{temp_config_name}')或query_external_database(database_name='{temp_config_name}')查询此数据库"
                         },
                         "metadata": {
                             "timestamp": datetime.now().isoformat(),
@@ -429,7 +622,7 @@ def _connect_external_database(db_type: str, config: dict, target_table: str = N
                         }
                     }
                     
-                    return f"✅ {db_type.upper()} 连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    return f"✅ {db_type.upper()} 外部数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                     
                 finally:
                     # 清理临时配置
@@ -488,13 +681,16 @@ def _connect_from_config(config: dict, target_table: str = None) -> str:
         
         result = {
             "status": "success",
-            "message": f"数据库连接成功: {database_name}",
+            "message": f"外部数据库连接成功: {database_name}（未导入数据）",
             "data": {
                 "database_name": database_name,
                 "database_type": db_info.get("type"),
                 "description": db_info.get("description", ""),
                 "tables": tables,
-                "table_count": len(tables)
+                "table_count": len(tables),
+                "connection_type": "外部数据库连接",
+                "data_location": "远程数据库服务器",
+                "usage_note": f"使用execute_sql(data_source='{database_name}')或query_external_database(database_name='{database_name}')查询此数据库"
             },
             "metadata": {
                 "timestamp": datetime.now().isoformat(),
@@ -502,7 +698,7 @@ def _connect_from_config(config: dict, target_table: str = None) -> str:
             }
         }
         
-        return f"✅ 数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        return f"✅ 外部数据库连接成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
     except Exception as e:
         logger.error(f"配置文件连接失败: {e}")
@@ -551,7 +747,8 @@ def _format_sql_error(error: Exception, query: str) -> dict:
 def execute_sql(
     query: str,
     params: dict = None,
-    limit: int = 1000
+    limit: int = 1000,
+    data_source: str = None
 ) -> str:
     """
     SQL执行工具
@@ -560,6 +757,7 @@ def execute_sql(
         query: SQL查询语句
         params: 查询参数（防止SQL注入）
         limit: 结果限制行数
+        data_source: 数据源名称（可选，默认使用本地SQLite）
     
     Returns:
         str: 查询结果
@@ -572,46 +770,88 @@ def execute_sql(
         if "LIMIT" not in query.upper() and "SELECT" in query.upper():
             query = f"{query} LIMIT {limit}"
         
-        # 执行查询
-        with get_db_connection() as conn:
-            if params:
-                cursor = conn.execute(query, params)
-            else:
-                cursor = conn.execute(query)
-            
-            # 获取结果
-            columns = [description[0] for description in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
-            
-            # 转换为字典列表
-            data = [dict(zip(columns, row)) for row in rows] if columns else []
-            
-            result = {
-                "status": "success",
-                "message": f"查询完成，返回 {len(data)} 条记录",
-                "data": {
-                    "columns": columns,
-                    "rows": data,
-                    "row_count": len(data)
-                },
-                "metadata": {
-                    "query": query,
+        # 根据数据源选择连接方式
+        if data_source:
+            # 使用外部数据库连接
+            try:
+                result_data = database_manager.execute_query(data_source, query, params)
+                
+                if result_data["success"]:
+                    result = {
+                        "status": "success",
+                        "message": f"查询完成，返回 {result_data.get('row_count', len(result_data['data']))} 条记录",
+                        "data": {
+                            "columns": list(result_data['data'][0].keys()) if result_data['data'] else [],
+                            "rows": result_data['data'],
+                            "row_count": result_data.get('row_count', len(result_data['data']))
+                        },
+                        "metadata": {
+                            "query": query,
+                            "data_source": data_source,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    return f"✅ SQL执行成功（数据源: {data_source}）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                else:
+                    result = {
+                        "status": "error",
+                        "message": f"查询失败: {result_data['error']}",
+                        "data_source": data_source,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    return f"❌ SQL执行失败（数据源: {data_source}）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            except Exception as e:
+                result = {
+                    "status": "error",
+                    "message": f"连接数据源失败: {str(e)}",
+                    "data_source": data_source,
                     "timestamp": datetime.now().isoformat()
                 }
-            }
-            
-            return f"✅ SQL执行成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                return f"❌ 数据源连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        else:
+            # 使用本地SQLite数据库
+            with get_db_connection() as conn:
+                if params:
+                    cursor = conn.execute(query, params)
+                else:
+                    cursor = conn.execute(query)
+                
+                # 获取结果
+                columns = [description[0] for description in cursor.description] if cursor.description else []
+                rows = cursor.fetchall()
+                
+                # 转换为字典列表
+                data = [dict(zip(columns, row)) for row in rows] if columns else []
+                
+                result = {
+                    "status": "success",
+                    "message": f"查询完成，返回 {len(data)} 条记录",
+                    "data": {
+                        "columns": columns,
+                        "rows": data,
+                        "row_count": len(data)
+                    },
+                    "metadata": {
+                        "query": query,
+                        "data_source": "本地SQLite",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                }
+                
+                return f"✅ SQL执行成功（数据源: 本地SQLite）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
             
     except Exception as e:
         logger.error(f"SQL执行失败: {e}")
         result = _format_sql_error(e, query)
         result["timestamp"] = datetime.now().isoformat()
+        result["data_source"] = data_source or "本地SQLite"
         return f"❌ SQL执行失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 @mcp.tool()
 def get_data_info(
     info_type: str = "tables",
-    table_name: str = None
+    table_name: str = None,
+    data_source: str = None
 ) -> str:
     """
     数据信息获取工具
@@ -619,101 +859,177 @@ def get_data_info(
     Args:
         info_type: 信息类型 (tables|schema|stats)
         table_name: 表名（获取特定表信息时需要）
+        data_source: 数据源名称（可选，默认使用本地SQLite）
     
     Returns:
         str: 数据库信息
     """
     try:
-        with get_db_connection() as conn:
-            if info_type == "tables":
-                # 获取所有表名（排除元数据表）
-                cursor = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name != '_metadata'"
-                )
-                tables = [row[0] for row in cursor.fetchall()]
-                
-                # 获取表的详细信息
-                table_info = []
-                for table in tables:
-                    try:
-                        escaped_table = _escape_identifier(table)
-                        cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
-                        row_count = cursor.fetchone()[0]
-                        table_info.append({
-                            "table_name": table,
-                            "row_count": row_count
-                        })
-                    except Exception as e:
-                        logger.warning(f"无法获取表 '{table}' 的行数: {e}")
-                        table_info.append({
-                            "table_name": table,
-                            "row_count": "N/A",
-                            "error": str(e)
-                        })
-                
-                result = {
-                    "status": "success",
-                    "message": f"找到 {len(tables)} 个表",
-                    "data": {
-                        "tables": table_info,
-                        "table_count": len(tables)
+        if data_source:
+            # 使用外部数据库连接
+            try:
+                if info_type == "tables":
+                    tables = database_manager.get_table_list(data_source)
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"找到 {len(tables)} 个表/集合",
+                        "data": {
+                            "tables": [{
+                                "table_name": table,
+                                "row_count": "N/A"  # 外部数据库暂不统计行数
+                            } for table in tables],
+                            "table_count": len(tables)
+                        },
+                        "metadata": {
+                            "data_source": data_source,
+                            "timestamp": datetime.now().isoformat()
+                        }
                     }
-                }
-                
-                return f"✅ 表信息获取成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-                
-            elif info_type == "schema" and table_name:
-                # 获取表结构
-                escaped_table = _escape_identifier(table_name)
-                cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
-                columns = cursor.fetchall()
-                
-                schema = []
-                for col in columns:
-                    schema.append({
-                        "column_name": col[1],
-                        "data_type": col[2],
-                        "not_null": bool(col[3]),
-                        "default_value": col[4],
-                        "primary_key": bool(col[5])
-                    })
-                
-                result = {
-                    "status": "success",
-                    "message": f"表 '{table_name}' 结构信息",
-                    "data": {
-                        "table_name": table_name,
-                        "columns": schema,
-                        "column_count": len(schema)
+                    
+                    return f"✅ 表信息获取成功（数据源: {data_source}）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+                elif info_type == "schema" and table_name:
+                    schema = database_manager.get_table_schema(data_source, table_name)
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"表/集合 '{table_name}' 结构信息",
+                        "data": {
+                            "table_name": table_name,
+                            "schema": schema,
+                            "column_count": len(schema) if isinstance(schema, list) else "N/A"
+                        },
+                        "metadata": {
+                            "data_source": data_source,
+                            "timestamp": datetime.now().isoformat()
+                        }
                     }
-                }
-                
-                return f"✅ 表结构获取成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-                
-            elif info_type == "stats" and table_name:
-                # 获取表统计信息
-                escaped_table = _escape_identifier(table_name)
-                cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
-                row_count = cursor.fetchone()[0]
-                
-                result = {
-                    "status": "success",
-                    "message": f"表 '{table_name}' 统计信息",
-                    "data": {
-                        "table_name": table_name,
-                        "row_count": row_count
+                    
+                    return f"✅ 表结构获取成功（数据源: {data_source}）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+                else:
+                    result = {
+                        "status": "error",
+                        "message": "外部数据源暂不支持stats信息类型或缺少必要参数",
+                        "supported_types": ["tables", "schema"],
+                        "data_source": data_source
                     }
-                }
-                
-                return f"✅ 统计信息获取成功\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-                
-            else:
+                    return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+            except Exception as e:
                 result = {
                     "status": "error",
-                    "message": "无效的信息类型或缺少必要参数",
-                    "supported_types": ["tables", "schema", "stats"]
+                    "message": f"连接数据源失败: {str(e)}",
+                    "data_source": data_source,
+                    "timestamp": datetime.now().isoformat()
                 }
-                return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                return f"❌ 数据源连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        else:
+            # 使用本地SQLite数据库
+            with get_db_connection() as conn:
+                if info_type == "tables":
+                    # 获取所有表名（排除元数据表）
+                    cursor = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name != '_metadata'"
+                    )
+                    tables = [row[0] for row in cursor.fetchall()]
+                    
+                    # 获取表的详细信息
+                    table_info = []
+                    for table in tables:
+                        try:
+                            escaped_table = _escape_identifier(table)
+                            cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                            row_count = cursor.fetchone()[0]
+                            table_info.append({
+                                "table_name": table,
+                                "row_count": row_count
+                            })
+                        except Exception as e:
+                            logger.warning(f"无法获取表 '{table}' 的行数: {e}")
+                            table_info.append({
+                                "table_name": table,
+                                "row_count": "N/A",
+                                "error": str(e)
+                            })
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"找到 {len(tables)} 个表",
+                        "data": {
+                            "tables": table_info,
+                            "table_count": len(tables)
+                        },
+                        "metadata": {
+                            "data_source": "本地SQLite",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    
+                    return f"✅ 表信息获取成功（数据源: 本地SQLite）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+                elif info_type == "schema" and table_name:
+                    # 获取表结构
+                    escaped_table = _escape_identifier(table_name)
+                    cursor = conn.execute(f"PRAGMA table_info({escaped_table})")
+                    columns = cursor.fetchall()
+                    
+                    schema = []
+                    for col in columns:
+                        schema.append({
+                            "column_name": col[1],
+                            "data_type": col[2],
+                            "not_null": bool(col[3]),
+                            "default_value": col[4],
+                            "primary_key": bool(col[5])
+                        })
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"表 '{table_name}' 结构信息",
+                        "data": {
+                            "table_name": table_name,
+                            "columns": schema,
+                            "column_count": len(schema)
+                        },
+                        "metadata": {
+                            "data_source": "本地SQLite",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    
+                    return f"✅ 表结构获取成功（数据源: 本地SQLite）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+                elif info_type == "stats" and table_name:
+                    # 获取表统计信息
+                    escaped_table = _escape_identifier(table_name)
+                    cursor = conn.execute(f"SELECT COUNT(*) FROM {escaped_table}")
+                    row_count = cursor.fetchone()[0]
+                    
+                    result = {
+                        "status": "success",
+                        "message": f"表 '{table_name}' 统计信息",
+                        "data": {
+                            "table_name": table_name,
+                            "row_count": row_count
+                        },
+                        "metadata": {
+                            "data_source": "本地SQLite",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    
+                    return f"✅ 统计信息获取成功（数据源: 本地SQLite）\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+                else:
+                    result = {
+                        "status": "error",
+                        "message": "无效的信息类型或缺少必要参数",
+                        "supported_types": ["tables", "schema", "stats"],
+                        "data_source": "本地SQLite"
+                    }
+                    return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                 
     except Exception as e:
         logger.error(f"获取数据信息失败: {e}")
@@ -1922,6 +2238,65 @@ def process_data(
             "error_type": type(e).__name__
         }
         return f"❌ 处理失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+
+@mcp.tool()
+def list_data_sources() -> str:
+    """
+    列出所有可用的数据源
+    
+    Returns:
+        str: 数据源列表
+    """
+    try:
+        # 获取外部数据库配置
+        external_databases = database_manager.get_available_databases()
+        
+        # 构建数据源列表
+        data_sources = {
+            "本地SQLite": {
+                "type": "sqlite",
+                "description": "本地SQLite数据库（默认数据源）",
+                "status": "可用",
+                "database_path": DB_PATH,
+                "is_default": True
+            }
+        }
+        
+        # 添加外部数据库
+        for db_name, db_config in external_databases.items():
+            data_sources[db_name] = {
+                "type": db_config.get("type", "unknown"),
+                "description": db_config.get("description", ""),
+                "status": "已配置" if db_config.get("enabled", True) else "已禁用",
+                "host": db_config.get("host", ""),
+                "database": db_config.get("database", ""),
+                "file_path": db_config.get("file_path", ""),
+                "is_default": False
+            }
+        
+        result = {
+            "status": "success",
+            "message": f"找到 {len(data_sources)} 个数据源",
+            "data": {
+                "data_sources": data_sources,
+                "count": len(data_sources),
+                "usage_note": "使用execute_sql或get_data_info时，可通过data_source参数指定数据源。不指定则默认使用本地SQLite。"
+            },
+            "metadata": {
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+        
+        return f"✅ 数据源列表\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except Exception as e:
+        logger.error(f"获取数据源列表失败: {e}")
+        result = {
+            "status": "error",
+            "message": f"获取数据源列表失败: {str(e)}",
+            "error_type": type(e).__name__
+        }
+        return f"❌ 获取失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
 
 @mcp.tool()
 def manage_database_config(

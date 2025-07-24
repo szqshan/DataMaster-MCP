@@ -48,6 +48,17 @@
       "database": "test",
       "auth_source": "admin",
       "description": "用户MongoDB测试数据库"
+    },
+    "mysql_final_test": {
+      "type": "mysql",
+      "host": "192.168.133.128",
+      "port": 13307,
+      "database": "test_db",
+      "username": "root",
+      "password": "shanzhiqiang",
+      "charset": "utf8mb4",
+      "description": "用户MySQL测试连接",
+      "enabled": true
     }
   },
   "default_limits": {
@@ -58,15 +69,11 @@
     "retry_delay": 1
   },
   "security": {
-    "allow_write_operations": false,
+    "allow_write_operations": true,
     "allowed_schemas": [],
     "blocked_keywords": [
       "DROP",
       "DELETE",
-      "UPDATE",
-      "INSERT",
-      "ALTER",
-      "CREATE",
       "TRUNCATE"
     ]
   }

@@ -864,7 +864,10 @@ class DatabaseManager:
             db_type = config["type"]
             
             if db_type == "mysql":
-                result = self.execute_query(database_name, "SHOW TABLES")
+                # 使用INFORMATION_SCHEMA查询，更可靠
+                db_name = config.get("database", "mysql")
+                result = self.execute_query(database_name, 
+                    f"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{db_name}'")
             elif db_type == "postgresql":
                 result = self.execute_query(database_name, 
                     "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
@@ -888,6 +891,7 @@ class DatabaseManager:
                         tables.append(row[0])
                 return tables
             else:
+                logger.error(f"查询表列表失败: {result.get('error', '未知错误')}")
                 return []
                 
         except Exception as e:
