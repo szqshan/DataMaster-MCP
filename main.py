@@ -3726,111 +3726,111 @@ def fetch_api_data(
             return f"❌ {error_info['friendly_message']}\n\n💡 解决建议:\n" + "\n".join([f"• {solution}" for solution in error_info['solutions']]) + f"\n\n🔧 技术详情:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
         # 自动持久化存储（方式二：默认流程）
-            if not storage_session_id:
-                # 自动创建存储会话
-                session_name = f"{api_name}_{endpoint_name}_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                create_success, auto_session_id, create_message = api_data_storage.create_storage_session(
-                    session_name=session_name,
+        if not storage_session_id:
+            # 自动创建存储会话
+            session_name = f"{api_name}_{endpoint_name}_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            create_success, auto_session_id, create_message = api_data_storage.create_storage_session(
+                session_name=session_name,
+                api_name=api_name,
+                endpoint_name=endpoint_name,
+                description=f"自动创建的存储会话 - {api_name}.{endpoint_name}"
+            )
+            
+            if not create_success:
+                result = {
+                    "status": "error",
+                    "message": f"自动创建存储会话失败: {create_message}"
+                }
+                return f"❌ 会话创建失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            
+            storage_session_id = auto_session_id
+            logger.info(f"自动创建存储会话: {session_name} (ID: {auto_session_id})")
+        else:
+            # 检查指定的会话是否存在，如果不存在则自动创建
+            session_info = api_data_storage._get_session_info(storage_session_id)
+            if not session_info:
+                # 尝试将storage_session_id作为session_name来创建会话
+                create_success, new_session_id, create_message = api_data_storage.create_storage_session(
+                    session_name=storage_session_id,
                     api_name=api_name,
                     endpoint_name=endpoint_name,
-                    description=f"自动创建的存储会话 - {api_name}.{endpoint_name}"
+                    description=f"根据指定名称创建的存储会话 - {api_name}.{endpoint_name}"
                 )
                 
                 if not create_success:
                     result = {
                         "status": "error",
-                        "message": f"自动创建存储会话失败: {create_message}"
+                        "message": f"指定的存储会话 '{storage_session_id}' 不存在，且自动创建失败: {create_message}",
+                        "suggestion": "请检查会话ID是否正确，或者不指定storage_session_id让系统自动创建"
                     }
-                    return f"❌ 会话创建失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    return f"❌ 会话不存在\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
                 
-                storage_session_id = auto_session_id
-                logger.info(f"自动创建存储会话: {session_name} (ID: {auto_session_id})")
-            else:
-                # 检查指定的会话是否存在，如果不存在则自动创建
-                session_info = api_data_storage._get_session_info(storage_session_id)
-                if not session_info:
-                    # 尝试将storage_session_id作为session_name来创建会话
-                    create_success, new_session_id, create_message = api_data_storage.create_storage_session(
-                        session_name=storage_session_id,
-                        api_name=api_name,
-                        endpoint_name=endpoint_name,
-                        description=f"根据指定名称创建的存储会话 - {api_name}.{endpoint_name}"
-                    )
-                    
-                    if not create_success:
-                        result = {
-                            "status": "error",
-                            "message": f"指定的存储会话 '{storage_session_id}' 不存在，且自动创建失败: {create_message}",
-                            "suggestion": "请检查会话ID是否正确，或者不指定storage_session_id让系统自动创建"
-                        }
-                        return f"❌ 会话不存在\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-                    
-                    storage_session_id = new_session_id
-                    logger.info(f"自动创建指定名称的存储会话: {storage_session_id} (新ID: {new_session_id})")
-            
-            # 数据转换（如果需要）
-            transformed_data = response_data
-            if transform_config:
-                transform_success, transformed_data, transform_message = data_transformer.transform_data(
-                    data=response_data,
-                    output_format="json",  # 存储时统一使用json格式
-                    transform_config=transform_config
-                )
-                if not transform_success:
-                    result = {
-                        "status": "error",
-                        "message": f"数据转换失败: {transform_message}",
-                        "data": {
-                            "api_name": api_name,
-                            "endpoint_name": endpoint_name
-                        }
-                    }
-                    return f"❌ 转换失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-            
-            # 存储到临时数据库
-            source_params = {
-                "api_name": api_name,
-                "endpoint_name": endpoint_name,
-                "params": params,
-                "method": method
-            }
-            
-            success, count, storage_message = api_data_storage.store_api_data(
-                session_id=storage_session_id,
-                raw_data=response_data,
-                processed_data=transformed_data,
-                source_params=source_params
+                storage_session_id = new_session_id
+                logger.info(f"自动创建指定名称的存储会话: {storage_session_id} (新ID: {new_session_id})")
+        
+        # 数据转换（如果需要）
+        transformed_data = response_data
+        if transform_config:
+            transform_success, transformed_data, transform_message = data_transformer.transform_data(
+                data=response_data,
+                output_format="json",  # 存储时统一使用json格式
+                transform_config=transform_config
             )
-            
-            if not success:
+            if not transform_success:
                 result = {
                     "status": "error",
-                    "message": f"数据存储失败: {storage_message}",
+                    "message": f"数据转换失败: {transform_message}",
                     "data": {
-                        "session_id": storage_session_id,
                         "api_name": api_name,
                         "endpoint_name": endpoint_name
                     }
                 }
-                return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-            
+                return f"❌ 转换失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        # 存储到临时数据库
+        source_params = {
+            "api_name": api_name,
+            "endpoint_name": endpoint_name,
+            "params": params,
+            "method": method
+        }
+        
+        success, count, storage_message = api_data_storage.store_api_data(
+            session_id=storage_session_id,
+            raw_data=response_data,
+            processed_data=transformed_data,
+            source_params=source_params
+        )
+        
+        if not success:
             result = {
-                "status": "success",
-                "message": "API数据已自动存储到数据库",
+                "status": "error",
+                "message": f"数据存储失败: {storage_message}",
                 "data": {
                     "session_id": storage_session_id,
                     "api_name": api_name,
-                    "endpoint_name": endpoint_name,
-                    "stored_records": count,
-                    "storage_message": storage_message
-                },
-                "metadata": {
-                    "timestamp": datetime.now().isoformat(),
-                    "transform_applied": bool(transform_config),
-                    "auto_session_created": not storage_session_id
+                    "endpoint_name": endpoint_name
                 }
             }
-            return f"💾 数据已自动存储到数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            return f"❌ 存储失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+        result = {
+            "status": "success",
+            "message": "API数据已自动存储到数据库",
+            "data": {
+                "session_id": storage_session_id,
+                "api_name": api_name,
+                "endpoint_name": endpoint_name,
+                "stored_records": count,
+                "storage_message": storage_message
+            },
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "transform_applied": bool(transform_config),
+                "auto_session_created": not storage_session_id
+            }
+        }
+        return f"💾 数据已自动存储到数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
     
     except Exception as e:
         logger.error(f"获取API数据失败: {e}")
