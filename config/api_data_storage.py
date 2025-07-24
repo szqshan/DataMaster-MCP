@@ -280,7 +280,8 @@ class APIDataStorage:
                     'total_records': row['total_records'],
                     'created_at': row['created_at'],
                     'updated_at': row['updated_at'],
-                    'status': row['status']
+                    'status': row['status'],
+                    'file_path': row['file_path']  # 添加file_path字段
                 }
                 sessions.append(session)
             
