@@ -359,7 +359,8 @@ def connect_data_source(
     
     📋 支持的数据源类型：
     - "excel" - Excel文件导入到数据库
-    - "csv" - CSV文件导入到数据库  
+    - "csv" - CSV文件导入到数据库
+    - "json" - JSON文件导入到数据库（支持嵌套结构自动扁平化）
     - "sqlite" - SQLite数据库文件连接
     - "mysql" - MySQL数据库连接（第一步：创建临时配置）
     - "postgresql" - PostgreSQL数据库连接（第一步：创建临时配置）
@@ -400,6 +401,8 @@ def connect_data_source(
             return _import_excel(config, target_table, target_database)
         elif source_type == "csv":
             return _import_csv(config, target_table, target_database)
+        elif source_type == "json":
+            return _import_json(config, target_table, target_database)
         elif source_type == "sqlite":
             return _connect_sqlite(config, target_table)
         elif source_type == "mysql":
@@ -414,7 +417,7 @@ def connect_data_source(
             result = {
                 "status": "error",
                 "message": f"不支持的数据源类型: {source_type}",
-                "supported_types": ["excel", "csv", "sqlite", "mysql", "postgresql", "mongodb", "database_config"]
+                "supported_types": ["excel", "csv", "json", "sqlite", "mysql", "postgresql", "mongodb", "database_config"]
             }
             return f"❌ 连接失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
             
@@ -570,6 +573,113 @@ def _import_csv(config: dict, target_table: str = None, target_database: str = N
         
     except Exception as e:
         logger.error(f"CSV导入失败: {e}")
+        raise
+
+def _import_json(config: dict, target_table: str = None, target_database: str = None) -> str:
+    """导入JSON文件到本地SQLite或外部数据库"""
+    try:
+        file_path = config.get('file_path')
+        encoding = config.get('encoding', 'utf-8')
+        flatten_nested = config.get('flatten_nested', True)  # 是否扁平化嵌套结构
+        max_nesting_level = config.get('max_nesting_level', 3)  # 最大嵌套层级
+        
+        if not file_path:
+            raise ValueError("缺少file_path参数")
+        
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        
+        # 读取JSON文件
+        with open(file_path, 'r', encoding=encoding) as f:
+            json_data = json.load(f)
+        
+        # 处理不同的JSON结构
+        if isinstance(json_data, list):
+            # JSON数组，直接转换为DataFrame
+            df = pd.json_normalize(json_data, max_level=max_nesting_level if flatten_nested else None)
+        elif isinstance(json_data, dict):
+            # JSON对象，需要判断结构
+            if any(isinstance(v, list) for v in json_data.values()):
+                # 包含数组的对象，尝试找到主要的数据数组
+                main_data = None
+                for key, value in json_data.items():
+                    if isinstance(value, list) and len(value) > 0:
+                        main_data = value
+                        break
+                
+                if main_data is not None:
+                    df = pd.json_normalize(main_data, max_level=max_nesting_level if flatten_nested else None)
+                    # 添加其他非数组字段作为常量列
+                    for key, value in json_data.items():
+                        if not isinstance(value, list):
+                            df[f'root_{key}'] = value
+                else:
+                    # 没有找到数组，将整个对象作为单行数据
+                    df = pd.json_normalize([json_data], max_level=max_nesting_level if flatten_nested else None)
+            else:
+                # 纯对象，作为单行数据
+                df = pd.json_normalize([json_data], max_level=max_nesting_level if flatten_nested else None)
+        else:
+            # 其他类型，转换为单行单列数据
+            df = pd.DataFrame({'value': [json_data]})
+        
+        # 清理列名（移除特殊字符）
+        df.columns = [str(col).replace(' ', '_').replace('-', '_').replace('.', '_').replace('[', '_').replace(']', '_') for col in df.columns]
+        
+        # 生成表名
+        if not target_table:
+            file_name = Path(file_path).stem
+            target_table = f"json_{file_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # 导入到数据库
+        if target_database:
+            # 导入到外部数据库
+            return _import_to_external_database(df, target_table, target_database, 'json', file_path, 
+                                               {'encoding': encoding, 'flatten_nested': flatten_nested, 'max_nesting_level': max_nesting_level})
+        else:
+            # 导入到本地SQLite数据库
+            with get_db_connection() as conn:
+                df.to_sql(target_table, conn, if_exists='replace', index=False)
+                
+                # 更新元数据
+                conn.execute("""
+                    INSERT OR REPLACE INTO _metadata 
+                    (table_name, created_at, source_type, source_path, row_count)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    target_table,
+                    datetime.now().isoformat(),
+                    'json',
+                    file_path,
+                    len(df)
+                ))
+                conn.commit()
+            
+            result = {
+                "status": "success",
+                "message": "JSON文件已导入到本地SQLite数据库",
+                "data": {
+                    "table_name": target_table,
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "columns": list(df.columns),
+                    "file_path": file_path,
+                    "flatten_nested": flatten_nested,
+                    "max_nesting_level": max_nesting_level,
+                    "connection_type": "本地数据导入",
+                    "data_location": f"本地SQLite数据库 ({DB_PATH})",
+                    "usage_note": f"使用execute_sql('SELECT * FROM \"{target_table}\"')查询此表数据"
+                },
+                "metadata": {
+                    "timestamp": datetime.now().isoformat(),
+                    "source_type": "json"
+                }
+            }
+            
+            return f"✅ JSON文件已导入到本地SQLite数据库\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+        
+    except Exception as e:
+        logger.error(f"JSON导入失败: {e}")
         raise
 
 def _create_sqlalchemy_engine(database_name: str):
@@ -1829,6 +1939,214 @@ def _export_to_csv(data_source: str, file_path: str, options: dict) -> dict:
             
     except Exception as e:
         raise Exception(f"CSV导出失败: {str(e)}")
+
+def _format_user_friendly_error(error_type: str, error_message: str, context: dict = None) -> dict:
+    """格式化用户友好的错误信息"""
+    error_solutions = {
+        "session_not_found": {
+            "friendly_message": "存储会话不存在",
+            "explanation": "您指定的数据存储会话ID不存在，可能是会话已被删除或ID输入错误。",
+            "solutions": [
+                "检查会话ID是否正确",
+                "使用 list_api_storage_sessions() 查看所有可用会话",
+                "如果会话确实不存在，工具会自动创建新会话"
+            ]
+        },
+        "api_call_failed": {
+            "friendly_message": "API调用失败",
+            "explanation": "无法成功调用指定的API接口，可能是网络问题、API参数错误或服务不可用。",
+            "solutions": [
+                "检查网络连接是否正常",
+                "验证API参数是否正确",
+                "确认API服务是否可用",
+                "检查API密钥是否有效"
+            ]
+        },
+        "invalid_parameters": {
+            "friendly_message": "参数无效",
+            "explanation": "提供的参数不符合API要求，可能导致无法获取到有效数据。",
+            "solutions": [
+                "检查参数格式是否正确",
+                "参考API文档确认参数要求",
+                "尝试使用推荐的参数组合",
+                "使用 api_data_preview 先测试参数"
+            ]
+        },
+        "data_format_error": {
+            "friendly_message": "数据格式错误",
+            "explanation": "返回的数据格式无法正确解析，可能是API返回了意外的数据结构。",
+            "solutions": [
+                "检查API返回的原始数据",
+                "尝试不同的数据转换配置",
+                "联系API提供商确认数据格式",
+                "使用原始格式查看数据内容"
+            ]
+        },
+        "file_not_found": {
+            "friendly_message": "文件不存在",
+            "explanation": "指定的文件路径不存在或无法访问。",
+            "solutions": [
+                "检查文件路径是否正确",
+                "确认文件是否存在",
+                "检查文件访问权限",
+                "使用绝对路径而非相对路径"
+            ]
+        },
+        "database_error": {
+            "friendly_message": "数据库操作失败",
+            "explanation": "数据库操作过程中发生错误，可能是连接问题或SQL语法错误。",
+            "solutions": [
+                "检查数据库连接是否正常",
+                "验证SQL语法是否正确",
+                "确认表和字段名称是否存在",
+                "检查数据库权限设置"
+            ]
+        }
+    }
+    
+    error_info = error_solutions.get(error_type, {
+        "friendly_message": "操作失败",
+        "explanation": "操作过程中发生了未知错误。",
+        "solutions": [
+            "检查输入参数是否正确",
+            "重试操作",
+            "如果问题持续，请联系技术支持"
+        ]
+    })
+    
+    result = {
+        "error_type": error_type,
+        "friendly_message": error_info["friendly_message"],
+        "explanation": error_info["explanation"],
+        "solutions": error_info["solutions"],
+        "technical_details": error_message
+    }
+    
+    if context:
+        result["context"] = context
+    
+    return result
+
+def _generate_enhanced_preview(data, max_rows=10, max_cols=10, preview_fields=None, 
+                             preview_depth=3, show_data_types=True, truncate_length=100):
+    """生成增强的数据预览"""
+    try:
+        preview_text = ""
+        structure_info = {}
+        
+        # 分析数据结构
+        if isinstance(data, dict):
+            structure_info["type"] = "object"
+            structure_info["keys"] = list(data.keys())
+            structure_info["total_keys"] = len(data.keys())
+            
+            # 查找主要数据数组
+            main_data_key = None
+            for key, value in data.items():
+                if isinstance(value, list) and len(value) > 0:
+                    main_data_key = key
+                    break
+            
+            if main_data_key:
+                structure_info["main_data_key"] = main_data_key
+                structure_info["main_data_count"] = len(data[main_data_key])
+                preview_data = data[main_data_key]
+            else:
+                preview_data = [data]  # 将单个对象包装为列表
+                
+        elif isinstance(data, list):
+            structure_info["type"] = "array"
+            structure_info["total_items"] = len(data)
+            preview_data = data
+        else:
+            structure_info["type"] = "primitive"
+            structure_info["value_type"] = type(data).__name__
+            preview_text = f"原始数据值: {str(data)[:truncate_length]}"
+            if len(str(data)) > truncate_length:
+                preview_text += "...(已截断)"
+            return {"preview_text": preview_text, "structure_info": structure_info}
+        
+        # 转换为DataFrame进行预览
+        try:
+            if preview_data and isinstance(preview_data, list) and len(preview_data) > 0:
+                # 扁平化嵌套数据
+                df = pd.json_normalize(preview_data, max_level=preview_depth)
+                
+                # 过滤指定字段
+                if preview_fields:
+                    available_fields = [col for col in preview_fields if col in df.columns]
+                    if available_fields:
+                        df = df[available_fields]
+                        structure_info["filtered_fields"] = available_fields
+                        structure_info["missing_fields"] = [col for col in preview_fields if col not in df.columns]
+                    else:
+                        preview_text += "⚠️ 指定的预览字段都不存在\n"
+                        preview_text += f"可用字段: {list(df.columns)[:10]}\n\n"
+                
+                # 限制行数和列数
+                original_rows, original_cols = df.shape
+                structure_info["original_shape"] = {"rows": original_rows, "columns": original_cols}
+                
+                if original_rows > max_rows:
+                    df_preview = df.head(max_rows)
+                    row_info = f"显示前{max_rows}行，共{original_rows}行"
+                else:
+                    df_preview = df
+                    row_info = f"共{original_rows}行"
+                
+                if original_cols > max_cols:
+                    df_preview = df_preview.iloc[:, :max_cols]
+                    col_info = f"显示前{max_cols}列，共{original_cols}列"
+                else:
+                    col_info = f"共{original_cols}列"
+                
+                # 生成预览文本
+                preview_text += f"📊 数据预览 ({row_info}, {col_info}):\n\n"
+                
+                # 截断长字段值
+                df_display = df_preview.copy()
+                for col in df_display.columns:
+                    if df_display[col].dtype == 'object':
+                        df_display[col] = df_display[col].astype(str).apply(
+                            lambda x: x[:truncate_length] + "..." if len(x) > truncate_length else x
+                        )
+                
+                preview_text += df_display.to_string(index=False, max_colwidth=truncate_length)
+                
+                # 添加数据类型信息
+                if show_data_types and original_cols <= max_cols:
+                    preview_text += "\n\n📋 数据类型:\n"
+                    for col in df_preview.columns:
+                        preview_text += f"  {col}: {df[col].dtype}\n"
+                
+                # 添加字段统计
+                if original_cols > max_cols:
+                    preview_text += f"\n💡 提示: 还有 {original_cols - max_cols} 个字段未显示\n"
+                    preview_text += f"所有字段: {', '.join(list(df.columns)[:20])}{'...' if original_cols > 20 else ''}\n"
+                
+                structure_info["preview_shape"] = {"rows": len(df_preview), "columns": len(df_preview.columns)}
+                structure_info["all_columns"] = list(df.columns)
+                
+            else:
+                preview_text = "📭 数据为空或无法解析"
+                structure_info["empty"] = True
+                
+        except Exception as e:
+            # 如果DataFrame转换失败，显示原始数据结构
+            preview_text += f"⚠️ 无法转换为表格格式，显示原始结构:\n\n"
+            preview_text += json.dumps(preview_data[:3] if isinstance(preview_data, list) else preview_data, 
+                                     indent=2, ensure_ascii=False, default=str)[:1000]
+            if len(str(preview_data)) > 1000:
+                preview_text += "\n...(数据已截断)"
+            structure_info["conversion_error"] = str(e)
+        
+        return {"preview_text": preview_text, "structure_info": structure_info}
+        
+    except Exception as e:
+        return {
+            "preview_text": f"❌ 预览生成失败: {str(e)}",
+            "structure_info": {"error": str(e)}
+        }
 
 def _export_to_json(data_source: str, file_path: str, options: dict) -> dict:
     """导出到JSON文件"""
@@ -3393,24 +3711,65 @@ def fetch_api_data(
         )
         
         if not success:
+            error_info = _format_user_friendly_error(
+                "api_call_failed", 
+                message,
+                {"api_name": api_name, "endpoint_name": endpoint_name, "params": params}
+            )
             result = {
                 "status": "error",
-                "message": f"API调用失败: {message}",
+                "message": error_info["friendly_message"],
+                "error_details": error_info,
                 "data": {
                     "api_name": api_name,
                     "endpoint_name": endpoint_name
                 }
             }
-            return f"❌ API调用失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            return f"❌ {error_info['friendly_message']}\n\n💡 解决建议:\n" + "\n".join([f"• {solution}" for solution in error_info['solutions']]) + f"\n\n🔧 技术详情:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
         # 检查是否需要持久化存储
         if persist_to_storage:
             if not storage_session_id:
-                result = {
-                    "status": "error",
-                    "message": "启用持久化存储时必须提供storage_session_id参数"
-                }
-                return f"❌ 参数错误\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                # 自动创建存储会话
+                session_name = f"{api_name}_{endpoint_name}_auto_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                create_success, auto_session_id, create_message = api_data_storage.create_storage_session(
+                    session_name=session_name,
+                    api_name=api_name,
+                    endpoint_name=endpoint_name,
+                    description=f"自动创建的存储会话 - {api_name}.{endpoint_name}"
+                )
+                
+                if not create_success:
+                    result = {
+                        "status": "error",
+                        "message": f"自动创建存储会话失败: {create_message}"
+                    }
+                    return f"❌ 会话创建失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                
+                storage_session_id = auto_session_id
+                logger.info(f"自动创建存储会话: {session_name} (ID: {auto_session_id})")
+            else:
+                # 检查指定的会话是否存在，如果不存在则自动创建
+                session_info = api_data_storage._get_session_info(storage_session_id)
+                if not session_info:
+                    # 尝试将storage_session_id作为session_name来创建会话
+                    create_success, new_session_id, create_message = api_data_storage.create_storage_session(
+                        session_name=storage_session_id,
+                        api_name=api_name,
+                        endpoint_name=endpoint_name,
+                        description=f"根据指定名称创建的存储会话 - {api_name}.{endpoint_name}"
+                    )
+                    
+                    if not create_success:
+                        result = {
+                            "status": "error",
+                            "message": f"指定的存储会话 '{storage_session_id}' 不存在，且自动创建失败: {create_message}",
+                            "suggestion": "请检查会话ID是否正确，或者不指定storage_session_id让系统自动创建"
+                        }
+                        return f"❌ 会话不存在\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+                    
+                    storage_session_id = new_session_id
+                    logger.info(f"自动创建指定名称的存储会话: {storage_session_id} (新ID: {new_session_id})")
             
             # 数据转换（如果需要）
             transformed_data = response_data
@@ -3532,20 +3891,69 @@ def api_data_preview(
     endpoint_name: str,
     params: dict = None,
     max_rows: int = 10,
-    max_cols: int = 10
+    max_cols: int = 10,
+    preview_fields: list = None,
+    preview_depth: int = 3,
+    show_data_types: bool = True,
+    show_summary: bool = True,
+    truncate_length: int = 100
 ) -> str:
     """
-    预览API数据
+    🔍 API数据预览工具 - 灵活预览API返回数据
+    
+    功能说明：
+    - 支持灵活的数据预览配置
+    - 可指定预览字段和深度
+    - 提供数据类型和摘要信息
+    - 避免数据截断问题
     
     Args:
         api_name: API名称
         endpoint_name: 端点名称
         params: 请求参数
-        max_rows: 最大显示行数
-        max_cols: 最大显示列数
+        max_rows: 最大显示行数 (默认10)
+        max_cols: 最大显示列数 (默认10)
+        preview_fields: 指定预览的字段列表 (可选)
+        preview_depth: JSON嵌套预览深度 (默认3)
+        show_data_types: 是否显示数据类型信息 (默认True)
+        show_summary: 是否显示数据摘要 (默认True)
+        truncate_length: 字段值截断长度 (默认100)
     
     Returns:
-        str: 数据预览
+        str: 数据预览结果
+        
+    📋 使用示例：
+    ```python
+    # 基本预览
+    api_data_preview(
+        api_name="alpha_vantage",
+        endpoint_name="news_sentiment",
+        params={"topics": "technology"}
+    )
+    
+    # 指定字段预览
+    api_data_preview(
+        api_name="alpha_vantage",
+        endpoint_name="news_sentiment",
+        params={"topics": "technology"},
+        preview_fields=["title", "summary", "sentiment_score"],
+        max_rows=5
+    )
+    
+    # 深度预览嵌套数据
+    api_data_preview(
+        api_name="complex_api",
+        endpoint_name="nested_data",
+        preview_depth=5,
+        truncate_length=200
+    )
+    ```
+    
+    🎯 关键理解点：
+    - preview_fields可以精确控制显示内容
+    - preview_depth控制JSON嵌套显示层级
+    - truncate_length避免超长字段影响显示
+    - 提供完整的数据结构分析
     """
     try:
         if not api_name or not endpoint_name:
@@ -3563,36 +3971,39 @@ def api_data_preview(
         )
         
         if not success:
+            error_info = _format_user_friendly_error(
+                "api_call_failed", 
+                message,
+                {"api_name": api_name, "endpoint_name": endpoint_name, "params": params}
+            )
             result = {
                 "status": "error",
-                "message": f"API调用失败: {message}",
+                "message": error_info["friendly_message"],
+                "error_details": error_info,
                 "data": {
                     "api_name": api_name,
                     "endpoint_name": endpoint_name
                 }
             }
-            return f"❌ API调用失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
+            return f"❌ {error_info['friendly_message']}\n\n💡 解决建议:\n" + "\n".join([f"• {solution}" for solution in error_info['solutions']]) + f"\n\n🔧 技术详情:\n{json.dumps(result, indent=2, ensure_ascii=False)}"
         
-        # 生成数据预览
-        preview_success, preview_text, preview_message = data_transformer.preview_data(
+        # 生成增强的数据预览
+        preview_result = _generate_enhanced_preview(
             data=response_data,
             max_rows=max_rows,
-            max_cols=max_cols
+            max_cols=max_cols,
+            preview_fields=preview_fields,
+            preview_depth=preview_depth,
+            show_data_types=show_data_types,
+            truncate_length=truncate_length
         )
         
-        if not preview_success:
-            result = {
-                "status": "error",
-                "message": f"数据预览失败: {preview_message}",
-                "data": {
-                    "api_name": api_name,
-                    "endpoint_name": endpoint_name
-                }
-            }
-            return f"❌ 预览失败\n\n{json.dumps(result, indent=2, ensure_ascii=False)}"
-        
-        # 获取数据摘要
-        summary_success, summary_data, summary_message = data_transformer.get_data_summary(response_data)
+        # 获取数据摘要（如果需要）
+        summary_data = None
+        if show_summary:
+            summary_success, summary_data, summary_message = data_transformer.get_data_summary(response_data)
+            if not summary_success:
+                summary_data = {"error": summary_message}
         
         result = {
             "status": "success",
@@ -3600,13 +4011,18 @@ def api_data_preview(
             "data": {
                 "api_name": api_name,
                 "endpoint_name": endpoint_name,
-                "preview": preview_text,
-                "summary": summary_data if summary_success else None
+                "preview": preview_result["preview_text"],
+                "data_structure": preview_result["structure_info"],
+                "summary": summary_data if show_summary else None
             },
             "metadata": {
                 "timestamp": datetime.now().isoformat(),
                 "max_rows": max_rows,
-                "max_cols": max_cols
+                "max_cols": max_cols,
+                "preview_fields": preview_fields,
+                "preview_depth": preview_depth,
+                "show_data_types": show_data_types,
+                "truncate_length": truncate_length
             }
         }
         
