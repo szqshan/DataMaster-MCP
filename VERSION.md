@@ -1,5 +1,27 @@
 # DataMaster_MCP 版本信息
 
+## v1.0.2 (2025-01-24)
+
+### 🐛 Bug修复
+
+#### 依赖和导入问题修复
+- **修复 SQLAlchemy 依赖缺失**: 将 SQLAlchemy 添加到核心依赖中，解决 uvx 运行时的 ModuleNotFoundError
+- **修复 logger 未定义错误**: 将 logger 定义移到文件开头，解决 NameError 问题
+- **优化导入顺序**: 确保所有依赖在使用前正确导入和初始化
+
+### 🔧 技术改进
+- 在 setup.py 中添加 `sqlalchemy>=2.0.0` 到核心依赖
+- 重新组织 main.py 中的导入和初始化顺序
+- 确保 uvx 运行环境的完整依赖支持
+
+### ✅ 验证结果
+- ✅ uvx 运行不再出现 SQLAlchemy 导入错误
+- ✅ logger 初始化正常，无 NameError
+- ✅ 所有核心功能正常运行
+- ✅ 依赖管理更加稳定
+
+---
+
 ## v1.0.1 (2025-01-24)
 
 ### 🐛 Bug修复

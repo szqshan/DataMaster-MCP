@@ -8,37 +8,57 @@
 
 ## 🚀 快速开始
 
-### 安装依赖
+### 一键安装
 
 ```bash
-pip install -r requirements.txt
+pip install datamaster-mcp
 ```
 
-### 启动服务
+### Claude Desktop 配置
 
-```bash
-python main.py
+在 Claude Desktop 配置文件中添加：
+
+```json
+{
+  "mcpServers": {
+    "datamaster-mcp": {
+      "command": "uvx",
+      "args": ["datamaster-mcp"]
+    }
+  }
+}
 ```
 
-### 基本使用
-
-```python
-# 导入Excel数据
-connect_data_source(
-    source_type="excel",
-    config={"file_path": "data.xlsx"},
-    target_table="my_data"
-)
-
-# 执行SQL查询
-execute_sql("SELECT * FROM my_data LIMIT 10")
-
-# 数据分析
-analyze_data(analysis_type="basic_stats", table_name="my_data")
-
-# 导出结果
-export_data(export_type="excel", data_source="my_data")
+**备用配置：**
+```json
+{
+  "mcpServers": {
+    "datamaster-mcp": {
+      "command": "python",
+      "args": ["-m", "datamaster_mcp.main"]
+    }
+  }
+}
 ```
+
+### 立即开始使用
+
+重启 Claude Desktop，然后说：
+```
+请帮我连接一个数据源
+```
+
+## 📖 使用指南
+
+### 🚀 快速上手
+- **⚡ [5分钟快速开始](QUICK_START.md)** - 立即开始使用
+- **📋 [完整安装使用指南](INSTALLATION_AND_USAGE_GUIDE.md)** - 详细功能说明
+
+### 📚 详细文档
+- **📚 [文档索引](DOCUMENTATION_INDEX.md)** - 所有文档导航
+- **📖 [用户使用手册](用户使用手册.md)** - 完整功能指南
+- **🛠️ [开发者文档](开发者文档.md)** - 技术文档
+- **⚙️ [客户端配置指南](CLIENT_CONFIG_GUIDE.md)** - Claude Desktop 配置
 
 ## ✨ 核心功能
 
@@ -60,9 +80,29 @@ export_data(export_type="excel", data_source="my_data")
 
 ## 📚 文档
 
-- **[用户使用手册](用户使用手册.md)** - 完整的功能使用指南
-- **[开发者文档](开发者文档.md)** - 技术文档和AI使用指南
-- **[项目结构说明](项目结构说明.md)** - 目录结构和文件说明
+### 用户文档
+- [用户使用手册](用户使用手册.md)
+- [本地测试指南](LOCAL_TEST_GUIDE.md)
+
+### 开发者文档
+- [开发者文档](开发者文档.md)
+- [开发流程指南](DEVELOPMENT_WORKFLOW.md) 🆕
+- [项目结构说明](项目结构说明.md)
+- [PyPI发布指南](PYPI_RELEASE_GUIDE.md)
+
+### 快速开发
+```bash
+# 设置开发环境
+python scripts/setup_dev.py
+
+# 运行测试
+python scripts/setup_dev.py --test-only
+
+# 发布新版本
+python scripts/release.py 1.0.2
+```
+
+### 版本信息
 - **[更新日志](CHANGELOG.md)** - 版本更新记录
 - **[版本信息](VERSION.md)** - 当前版本详情
 
@@ -83,4 +123,4 @@ export_data(export_type="excel", data_source="my_data")
 
 ---
 
-**版本**: v1.0.0 | **状态**: ✅ 稳定版 | **更新**: 2025-01-24
+**版本**: v1.0.2 | **状态**: ✅ 稳定版 | **更新**: 2025-01-24

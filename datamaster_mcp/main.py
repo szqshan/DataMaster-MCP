@@ -20,6 +20,10 @@ from mcp.server.fastmcp import FastMCP
 import numpy as np
 from scipy import stats
 
+# 设置日志（需要在使用 logger 之前定义）
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("DataMaster_MCP")
+
 # SQLAlchemy imports for pandas to_sql compatibility
 try:
     from sqlalchemy import create_engine
@@ -29,14 +33,30 @@ except ImportError:
     logger.warning("SQLAlchemy not available. External database import may not work properly.")
 
 # 导入数据库管理器
-from .config.database_manager import database_manager
-from .config.config_manager import config_manager
-
-# 导入API连接器组件
-from .config.api_config_manager import api_config_manager
-from .config.api_connector import api_connector
-from .config.data_transformer import data_transformer
-from .config.api_data_storage import api_data_storage
+try:
+    # 尝试相对导入（当作为包使用时）
+    from .config.database_manager import database_manager
+    from .config.config_manager import config_manager
+    from .config.api_config_manager import api_config_manager
+    from .config.api_connector import api_connector
+    from .config.data_transformer import data_transformer
+    from .config.api_data_storage import api_data_storage
+except ImportError:
+    # 如果相对导入失败，尝试绝对导入（当直接运行时）
+    import sys
+    from pathlib import Path
+    
+    # 添加项目根目录到 Python 路径
+    current_dir = Path(__file__).parent.parent
+    if str(current_dir) not in sys.path:
+        sys.path.insert(0, str(current_dir))
+    
+    from datamaster_mcp.config.database_manager import database_manager
+    from datamaster_mcp.config.config_manager import config_manager
+    from datamaster_mcp.config.api_config_manager import api_config_manager
+    from datamaster_mcp.config.api_connector import api_connector
+    from datamaster_mcp.config.data_transformer import data_transformer
+    from datamaster_mcp.config.api_data_storage import api_data_storage
 
 # ================================
 # DataFrame序列化处理
@@ -93,10 +113,6 @@ TOOL_NAME = "DataMaster_MCP"
 DB_PATH = "data/analysis.db"
 DATA_DIR = "data"
 EXPORTS_DIR = "exports"
-
-# 设置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(TOOL_NAME)
 
 # 创建MCP服务器
 mcp = FastMCP(TOOL_NAME)

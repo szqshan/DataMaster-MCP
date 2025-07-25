@@ -12,18 +12,27 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 
 # Read version from VERSION.md
-version_file = this_directory / "VERSION.md"
-if version_file.exists():
-    version_content = version_file.read_text(encoding='utf-8')
-    # Extract version number from markdown content
-    for line in version_content.split('\n'):
-        if line.startswith('## 当前版本') or line.startswith('## Current Version'):
-            version = line.split()[-1].strip('v')
-            break
-    else:
-        version = "1.0.1"  # fallback version
-else:
-    version = "1.0.1"
+import re
+
+def get_version():
+    """从 VERSION.md 文件中读取版本号"""
+    version_file = this_directory / "VERSION.md"
+    try:
+        with open(version_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # 查找版本号模式：## v1.0.2 (2025-01-24)
+        match = re.search(r'^## v([0-9]+\.[0-9]+\.[0-9]+)', content, re.MULTILINE)
+        if match:
+            return match.group(1)
+        
+        # 如果没找到，返回默认版本
+        return "1.0.2"
+    except Exception as e:
+        print(f"Error reading version: {e}")
+        return "1.0.2"
+
+version = get_version()
 
 # Read requirements
 requirements = []
@@ -49,6 +58,7 @@ core_requirements = [
     'scipy>=1.10.0',
     'python-dotenv>=1.0.0',
     'requests>=2.28.0',
+    'sqlalchemy>=2.0.0',
 ]
 
 # Optional dependencies

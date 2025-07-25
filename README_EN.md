@@ -8,37 +8,57 @@
 
 ## 🚀 Quick Start
 
-### Install Dependencies
+### One-Click Installation
 
 ```bash
-pip install -r requirements.txt
+pip install datamaster-mcp
 ```
 
-### Start Service
+### Claude Desktop Configuration
 
-```bash
-python main.py
+Add to Claude Desktop config file:
+
+```json
+{
+  "mcpServers": {
+    "datamaster-mcp": {
+      "command": "uvx",
+      "args": ["datamaster-mcp"]
+    }
+  }
+}
 ```
 
-### Basic Usage
-
-```python
-# Import Excel data
-connect_data_source(
-    source_type="excel",
-    config={"file_path": "data.xlsx"},
-    target_table="my_data"
-)
-
-# Execute SQL query
-execute_sql("SELECT * FROM my_data LIMIT 10")
-
-# Data analysis
-analyze_data(analysis_type="basic_stats", table_name="my_data")
-
-# Export results
-export_data(export_type="excel", data_source="my_data")
+**Alternative Configuration:**
+```json
+{
+  "mcpServers": {
+    "datamaster-mcp": {
+      "command": "python",
+      "args": ["-m", "datamaster_mcp.main"]
+    }
+  }
+}
 ```
+
+### Start Using Immediately
+
+Restart Claude Desktop, then say:
+```
+Please help me connect to a data source
+```
+
+## 📖 Complete Usage Guide
+
+**🎯 Must-read for new users:** [📋 Complete Installation & Usage Guide](INSTALLATION_AND_USAGE_GUIDE.md)
+
+This guide includes:
+- ✅ Detailed installation steps
+- ⚙️ Claude Desktop configuration
+- 📚 Basic usage tutorials
+- 🔧 Advanced features
+- 🚨 Troubleshooting
+- 📖 Practical examples
 
 ## ✨ Core Features
 
@@ -83,4 +103,4 @@ export_data(export_type="excel", data_source="my_data")
 
 ---
 
-**Version**: v1.0.1 | **Status**: ✅ Stable | **Updated**: 2025-01-24
+**Version**: v1.0.2 | **Status**: ✅ Stable | **Updated**: 2025-01-24

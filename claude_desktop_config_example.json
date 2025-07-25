@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "datamaster-mcp": {
+      "command": "uvx",
+      "args": [
+        "datamaster-mcp"
+      ]
+    }
+  }
+}
