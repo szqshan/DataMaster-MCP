@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "datamaster-mcp"
 version = "1.0.1"
 authors = [
-    {name = "szqshan", email = "your.email@example.com"},
+    {name = "Shan", email = "shan@ai1000days.com", organization = "学习AI1000天"},
 ]
 description = "DataMaster MCP - AI-powered data analysis tool with MCP protocol support"
 readme = "README.md"

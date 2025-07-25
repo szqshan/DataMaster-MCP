@@ -68,8 +68,8 @@ optional_requirements = {
 setup(
     name="datamaster-mcp",
     version=version,
-    author="szqshan",
-    author_email="your.email@example.com",  # Please update with your actual email
+    author="Shan",
+    author_email="shan@ai1000days.com",  # 学习AI1000天
     description="DataMaster MCP - AI-powered data analysis tool with MCP protocol support",
     long_description=long_description,
     long_description_content_type="text/markdown",

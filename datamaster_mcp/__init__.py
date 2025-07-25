@@ -7,7 +7,7 @@ DataMaster MCP - 超级数据分析工具
 """
 
 __version__ = "1.0.1"
-__author__ = "DataMaster Team"
+__author__ = "Shan (学习AI1000天)"
 
 # 导出主要接口
 from .main import main
