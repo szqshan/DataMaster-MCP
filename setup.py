@@ -69,7 +69,7 @@ setup(
     name="datamaster-mcp",
     version=version,
     author="Shan",
-    author_email="shan@ai1000days.com",  # 学习AI1000天
+    author_email="szqshan@gmail.com",  # 学习AI1000天
     description="DataMaster MCP - AI-powered data analysis tool with MCP protocol support",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -78,6 +78,8 @@ setup(
         "Bug Reports": "https://github.com/szqshan/DataMaster/issues",
         "Source": "https://github.com/szqshan/DataMaster",
         "Documentation": "https://github.com/szqshan/DataMaster/blob/master/README.md",
+        "Homepage": "https://www.xueai.org",
+        "Learning Platform": "https://www.xueai.me",
     },
     packages=find_packages(),
     classifiers=[

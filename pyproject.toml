@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "datamaster-mcp"
 version = "1.0.1"
 authors = [
-    {name = "Shan", email = "shan@ai1000days.com", organization = "学习AI1000天"},
+    {name = "Shan", email = "szqshan@gmail.com", organization = "学习AI1000天"},
 ]
 description = "DataMaster MCP - AI-powered data analysis tool with MCP protocol support"
 readme = "README.md"
@@ -57,7 +57,8 @@ all = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/szqshan/DataMaster"
+"Homepage" = "https://www.xueai.org"
+"Learning Platform" = "https://www.xueai.me"
 "Bug Reports" = "https://github.com/szqshan/DataMaster/issues"
 "Source" = "https://github.com/szqshan/DataMaster"
 "Documentation" = "https://github.com/szqshan/DataMaster/blob/master/README.md"
