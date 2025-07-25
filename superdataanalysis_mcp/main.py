@@ -29,14 +29,14 @@ except ImportError:
     logger.warning("SQLAlchemy not available. External database import may not work properly.")
 
 # 导入数据库管理器
-from config.database_manager import database_manager
-from config.config_manager import config_manager
+from .config.database_manager import database_manager
+from .config.config_manager import config_manager
 
 # 导入API连接器组件
-from config.api_config_manager import api_config_manager
-from config.api_connector import api_connector
-from config.data_transformer import data_transformer
-from config.api_data_storage import api_data_storage
+from .config.api_config_manager import api_config_manager
+from .config.api_connector import api_connector
+from .config.data_transformer import data_transformer
+from .config.api_data_storage import api_data_storage
 
 # ================================
 # DataFrame序列化处理
@@ -5017,7 +5017,8 @@ def list_api_storage_sessions() -> str:
 # ================================
 # 4. 启动服务器
 # ================================
-if __name__ == "__main__":
+def main():
+    """主入口函数"""
     logger.info(f"启动 {TOOL_NAME}")
     
     # 初始化数据库
@@ -5029,6 +5030,9 @@ if __name__ == "__main__":
         logger.info("正在关闭...")
     finally:
         logger.info("服务器已关闭")
+
+if __name__ == "__main__":
+    main()
 
 # ================================
 # 5. 使用说明

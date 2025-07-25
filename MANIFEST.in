@@ -1,0 +1,48 @@
+# Include documentation files
+include README.md
+include README_EN.md
+include CHANGELOG.md
+include VERSION.md
+include LICENSE
+include requirements.txt
+include .env.example
+
+# Include documentation
+include *.md
+include 开发者文档.md
+include 用户使用手册.md
+include 项目结构说明.md
+
+# Include configuration files
+recursive-include config *.json
+recursive-include config *.py
+
+# Include test data (if needed)
+recursive-include test *.json
+
+# Exclude unnecessary files
+exclude .gitignore
+exclude *.pyc
+exclude *.pyo
+exclude *.pyd
+exclude __pycache__
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * *.so
+recursive-exclude * .DS_Store
+recursive-exclude * .git*
+
+# Exclude development and build files
+exclude .env
+exclude build
+exclude dist
+exclude *.egg-info
+recursive-exclude build *
+recursive-exclude dist *
+recursive-exclude *.egg-info *
+
+# Exclude data and exports directories (runtime generated)
+exclude data
+exclude exports
+recursive-exclude data *
+recursive-exclude exports *

@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superdataanalysis-mcp"
+version = "1.0.1"
+authors = [
+    {name = "szqshan", email = "your.email@example.com"},
+]
+description = "SuperDataAnalysis MCP - AI-powered data analysis tool with MCP protocol support"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+]
+keywords = [
+    "mcp", "data-analysis", "ai", "pandas", "database", 
+    "excel", "csv", "json", "mysql", "postgresql", "mongodb",
+    "data-processing", "analytics", "business-intelligence"
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "openpyxl>=3.1.0",
+    "xlrd>=2.0.0",
+    "scipy>=1.10.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+mysql = ["pymysql>=1.1.0"]
+postgresql = ["psycopg2-binary>=2.9.0"]
+mongodb = ["pymongo>=4.5.0"]
+xml = ["xmltodict>=0.13.0"]
+all = [
+    "pymysql>=1.1.0",
+    "psycopg2-binary>=2.9.0", 
+    "pymongo>=4.5.0",
+    "xmltodict>=0.13.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/szqshan/DataMaster"
+"Bug Reports" = "https://github.com/szqshan/DataMaster/issues"
+"Source" = "https://github.com/szqshan/DataMaster"
+"Documentation" = "https://github.com/szqshan/DataMaster/blob/master/README.md"
+
+[project.scripts]
+superdataanalysis-mcp = "superdataanalysis_mcp.main:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]  # list of folders that contain the packages (["src"] by default)
+include = ["superdataanalysis_mcp*"]  # package names should match these glob patterns (["*"] by default)
+exclude = ["tests*"]  # exclude packages matching these glob patterns (empty by default)
+
+[tool.setuptools.package-data]
+superdataanalysis_mcp = [
+    "config/*.json",
+    "config/*.py", 
+    "*.md",
+    "requirements.txt",
+]
+
+# Development tools configuration
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+# A regex preceded by ^/ will apply only to files and directories
+# in the root of the project.
+^/setup.py
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
