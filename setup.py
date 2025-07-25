@@ -66,11 +66,11 @@ optional_requirements = {
 }
 
 setup(
-    name="superdataanalysis-mcp",
+    name="datamaster-mcp",
     version=version,
     author="szqshan",
     author_email="your.email@example.com",  # Please update with your actual email
-    description="SuperDataAnalysis MCP - AI-powered data analysis tool with MCP protocol support",
+    description="DataMaster MCP - AI-powered data analysis tool with MCP protocol support",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/szqshan/DataMaster",
@@ -102,12 +102,12 @@ setup(
     extras_require=optional_requirements,
     entry_points={
         "console_scripts": [
-            "superdataanalysis-mcp=superdataanalysis_mcp.main:main",
+            "datamaster-mcp=datamaster_mcp.main:main",
         ],
     },
     include_package_data=True,
     package_data={
-        "superdataanalysis_mcp": [
+        "datamaster_mcp": [
             "config/*.json",
             "config/*.py",
             "*.md",

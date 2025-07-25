@@ -3,12 +3,12 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "superdataanalysis-mcp"
+name = "datamaster-mcp"
 version = "1.0.1"
 authors = [
     {name = "szqshan", email = "your.email@example.com"},
 ]
-description = "SuperDataAnalysis MCP - AI-powered data analysis tool with MCP protocol support"
+description = "DataMaster MCP - AI-powered data analysis tool with MCP protocol support"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
@@ -63,18 +63,18 @@ all = [
 "Documentation" = "https://github.com/szqshan/DataMaster/blob/master/README.md"
 
 [project.scripts]
-superdataanalysis-mcp = "superdataanalysis_mcp.main:main"
+datamaster-mcp = "datamaster_mcp.main:main"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]  # list of folders that contain the packages (["src"] by default)
-include = ["superdataanalysis_mcp*"]  # package names should match these glob patterns (["*"] by default)
+include = ["datamaster_mcp*"]  # package names should match these glob patterns (["*"] by default)
 exclude = ["tests*"]  # exclude packages matching these glob patterns (empty by default)
 
 [tool.setuptools.package-data]
-superdataanalysis_mcp = [
+datamaster_mcp = [
     "config/*.json",
     "config/*.py", 
     "*.md",

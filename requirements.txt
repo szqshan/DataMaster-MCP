@@ -1,4 +1,4 @@
-# SuperDataAnalysis MCP 依赖包
+# DataMaster MCP 依赖包
 # 核心MCP框架
 mcp>=1.0.0
 

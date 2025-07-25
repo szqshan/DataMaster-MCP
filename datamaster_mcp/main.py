@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SuperDataAnalysis MCP - 超级数据分析工具
+DataMaster MCP - 超级数据分析工具
 为AI提供强大的数据分析能力
 
 核心理念：工具专注数据获取和计算，AI专注智能分析和洞察
@@ -89,7 +89,7 @@ def _handle_data_format(data, format_type: str = "dict"):
 # ================================
 # 1. 配置和初始化
 # ================================
-TOOL_NAME = "SuperDataAnalysis_MCP"
+TOOL_NAME = "DataMaster_MCP"
 DB_PATH = "data/analysis.db"
 DATA_DIR = "data"
 EXPORTS_DIR = "exports"
@@ -5038,7 +5038,7 @@ if __name__ == "__main__":
 # 5. 使用说明
 # ================================
 """
-🚀 SuperDataAnalysis MCP 使用指南：
+🚀 DataMaster MCP 使用指南：
 
 1️⃣ 导入Excel数据：
    connect_data_source(

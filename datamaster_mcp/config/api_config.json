@@ -68,7 +68,7 @@
       },
       "headers": {
         "Content-Type": "application/json",
-        "User-Agent": "SuperDataAnalysis-MCP/1.0"
+        "User-Agent": "DataMaster-MCP/1.0"
       },
       "timeout": 30,
       "retry_attempts": 3,
@@ -126,7 +126,7 @@
     "max_response_size": "10MB",
     "follow_redirects": true,
     "verify_ssl": true,
-    "user_agent": "SuperDataAnalysis-MCP/1.0"
+    "user_agent": "DataMaster-MCP/1.0"
   },
   "security": {
     "allowed_domains": [],

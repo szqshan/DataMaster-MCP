@@ -1,13 +1,13 @@
 # PyPI 发布指南
 
-本文档详细说明如何将 SuperDataAnalysis MCP 发布到 PyPI。
+本文档详细说明如何将 DataMaster MCP 发布到 PyPI。
 
 ## 📋 准备工作清单
 
 ### ✅ 已完成的准备工作
 
 1. **项目结构重构** ✅
-   - 创建了 `superdataanalysis_mcp` 包目录
+   - 创建了 `datamaster_mcp` 包目录
    - 移动了 `main.py` 到包目录
    - 移动了 `config` 目录到包内
    - 修复了导入路径（使用相对导入）
@@ -27,7 +27,7 @@
 
 4. **包结构** ✅
    ```
-   superdataanalysis_mcp/
+   datamaster_mcp/
    ├── __init__.py          # 包初始化文件
    ├── main.py              # 主程序文件
    └── config/              # 配置模块
@@ -90,8 +90,8 @@ python -m build
 ```
 
 这将创建：
-- `dist/superdataanalysis_mcp-1.0.1.tar.gz` (源码包)
-- `dist/superdataanalysis_mcp-1.0.1-py3-none-any.whl` (wheel包)
+- `dist/datamaster_mcp-1.0.1.tar.gz` (源码包)
+- `dist/datamaster_mcp-1.0.1-py3-none-any.whl` (wheel包)
 
 ### 4. 检查包
 
@@ -113,7 +113,7 @@ twine upload --repository testpypi dist/*
 
 ```bash
 # 从 TestPyPI 安装测试
-pip install --index-url https://test.pypi.org/simple/ superdataanalysis-mcp
+pip install --index-url https://test.pypi.org/simple/ datamaster-mcp
 ```
 
 ### 6. 正式发布
@@ -129,10 +129,10 @@ twine upload dist/*
 
 ```bash
 # 安装验证
-pip install superdataanalysis-mcp
+pip install datamaster-mcp
 
 # 测试运行
-superdataanalysis-mcp --help
+datamaster-mcp --help
 ```
 
 ## 🔐 认证配置
@@ -164,7 +164,7 @@ password = pypi-your-test-api-token-here
 
 ## 📦 包信息
 
-- **包名**: `superdataanalysis-mcp`
+- **包名**: `datamaster-mcp`
 - **版本**: `1.0.1`
 - **Python 要求**: `>=3.8`
 - **许可证**: MIT
@@ -176,19 +176,19 @@ password = pypi-your-test-api-token-here
 
 ```bash
 # 基础安装
-pip install superdataanalysis-mcp
+pip install datamaster-mcp
 
 # 包含 MySQL 支持
-pip install superdataanalysis-mcp[mysql]
+pip install datamaster-mcp[mysql]
 
 # 包含 PostgreSQL 支持
-pip install superdataanalysis-mcp[postgresql]
+pip install datamaster-mcp[postgresql]
 
 # 包含 MongoDB 支持
-pip install superdataanalysis-mcp[mongodb]
+pip install datamaster-mcp[mongodb]
 
 # 包含所有可选依赖
-pip install superdataanalysis-mcp[all]
+pip install datamaster-mcp[all]
 ```
 
 ## 🔄 版本更新流程
@@ -197,7 +197,7 @@ pip install superdataanalysis-mcp[all]
    - `VERSION.md`
    - `setup.py`
    - `pyproject.toml`
-   - `superdataanalysis_mcp/__init__.py`
+   - `datamaster_mcp/__init__.py`
 
 2. 更新 `CHANGELOG.md`
 

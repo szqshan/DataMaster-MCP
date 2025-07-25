@@ -1,4 +1,4 @@
-# SuperDataAnalysis_MCP 版本信息
+# DataMaster_MCP 版本信息
 
 ## v1.0.1 (2025-01-24)
 
@@ -26,7 +26,7 @@
 
 ### 🎉 正式版本发布
 
-这是SuperDataAnalysis_MCP的第一个正式版本，提供完整的数据分析功能。
+这是DataMaster_MCP的第一个正式版本，提供完整的数据分析功能。
 
 ### ✅ 核心功能
 

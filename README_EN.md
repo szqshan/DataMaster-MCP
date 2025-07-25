@@ -1,4 +1,4 @@
-# 📊 SuperDataAnalysis MCP
+# 📊 DataMaster MCP
 
 > **Super Data Analysis MCP Tool** - Providing powerful data analysis capabilities for AI
 

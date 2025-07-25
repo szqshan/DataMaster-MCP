@@ -44,7 +44,7 @@ class APIConnector:
         self.session.timeout = default_settings.get("timeout", 30)
         
         # 设置User-Agent
-        user_agent = default_settings.get("user_agent", "SuperDataAnalysis-MCP/1.0")
+        user_agent = default_settings.get("user_agent", "DataMaster-MCP/1.0")
         self.session.headers.update({"User-Agent": user_agent})
         
         # SSL验证设置

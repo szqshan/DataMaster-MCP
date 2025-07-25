@@ -122,7 +122,7 @@ class APIConfigManager:
             "max_response_size": "10MB",
             "follow_redirects": True,
             "verify_ssl": True,
-            "user_agent": "SuperDataAnalysis-MCP/1.0"
+            "user_agent": "DataMaster-MCP/1.0"
         })
     
     def get_security_config(self) -> Dict[str, Any]:
