@@ -84,7 +84,6 @@ This guide includes:
 - **[Developer Documentation](开发者文档.md)** - Technical documentation and AI usage guide
 - **[Project Structure](项目结构说明.md)** - Directory structure and file descriptions
 - **[Changelog](CHANGELOG.md)** - Version update records
-- **[Version Info](VERSION.md)** - Current version details
 
 ## 🛡️ Security Features
 
