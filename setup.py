@@ -21,7 +21,7 @@ def get_version():
         with open(version_file, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # 查找版本号模式：## v1.0.2 (2025-01-24)
+        # 查找版本号模式：## v1.0.3 (2025-01-24)
         match = re.search(r'^## v([0-9]+\.[0-9]+\.[0-9]+)', content, re.MULTILINE)
         if match:
             return match.group(1)

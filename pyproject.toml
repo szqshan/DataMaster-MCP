@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datamaster-mcp"
-version = "1.0.2"
+version = "1.0.3"
 authors = [
     {name = "Shan (学习AI1000天)", email = "szqshan@gmail.com"},
 ]
