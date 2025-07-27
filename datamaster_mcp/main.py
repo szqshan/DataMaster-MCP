@@ -166,7 +166,7 @@ def init_database():
 def _escape_identifier(identifier: str) -> str:
     """转义SQL标识符（表名、列名等）"""
     # 使用双引号包围标识符，并转义内部的双引号
-    return f'"{identifier.replace('"', '""')}"'
+    return '"' + identifier.replace('"', '""') + '"'
 
 def _safe_table_query(table_name: str, query_template: str) -> str:
     """安全地构建包含表名的查询"""
