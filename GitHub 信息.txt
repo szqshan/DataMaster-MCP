@@ -1,0 +1,19 @@
+# 我的GitHub认证信息（私密文档，请勿分享）
+
+## 账号信息
+- GitHub用户名: szqshan
+- 仓库地址: https://github.com/szqshan/DataMaster-MCP
+- SSH仓库地址: git@github.com:szqshan/DataMaster-MCP.git
+- ssh key：SHA256:aztVHsIBh0OeH8m+drNh5pNRy7gFn/h58HDzkee5PLQ
+- ssh public key：ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIK6DPCaCaiU7fSBn0SGUcZGVbtbCtFOHEvpEEwQ8WbK
+
+## 身份验证方式
+目前配置的是SSH认证方式，意味着：
+1. 不需要每次输入用户名密码
+2. 已经在GitHub添加了SSH公钥
+3. 本地SSH密钥位置：C:\Users\root\.ssh\
+
+
+用户名 szqshan，密码 89550457Shan
+邮箱szqshan@gmail.com
+
