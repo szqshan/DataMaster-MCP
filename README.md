@@ -42,17 +42,9 @@
 - **内存**: 最少4GB RAM（推荐8GB以上）
 - **存储**: 至少1GB可用空间
 
-### 快速部署步骤
-
-#### 1. 获取项目
-```bash
-git clone https://github.com/your-username/DataMaster-MCP.git
-cd DataMaster-MCP/source-code
-```
-
 #### 2. 安装依赖
 ```bash
-pip install -r requirements.txt
+pip install datamaster-mcp
 ```
 
 #### 3. 配置文件设置
@@ -70,56 +62,6 @@ pip install -r requirements.txt
     }
   }
 }
-```
-
-#### 4. 启动服务器
-
-**方式一：直接启动**
-```bash
-cd source-code
-python -m datamaster_mcp.main
-```
-
-**方式二：使用MCP客户端启动**
-```bash
-# 安装MCP客户端
-pip install mcp-client
-
-# 启动客户端并连接服务器
-mcp-client --config config/mcp_config.json
-```
-
-#### 5. 验证部署
-
-启动成功后，你应该看到如下日志：
-```
-[INFO] 初始化数据库模块...
-[INFO] 初始化数据分析模块...
-[INFO] 初始化数据处理模块...
-[INFO] 初始化API管理模块...
-[INFO] DataMaster MCP服务器启动成功！
-[INFO] 正在监听连接...
-```
-
-### 环境变量配置
-
-在项目根目录创建 `.env` 文件：
-
-```bash
-# 数据库配置
-DATABASE_URL=sqlite:///data/analysis.db
-
-# API配置
-API_TIMEOUT=30
-MAX_RETRIES=3
-
-# 日志配置
-LOG_LEVEL=INFO
-LOG_FILE=logs/datamaster.log
-
-# 服务器配置
-HOST=localhost
-PORT=8000
 ```
 
 ## 使用示例
